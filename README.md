@@ -77,12 +77,41 @@ Installs two console scripts:
 
 ---
 
+## Which mode should I use?
+
+Two modes are available, and they are **not** ordered by quality —
+each addresses a different failure.
+
+| | Total-ρ restart | Diff-ρ restart |
+|---|---|---|
+| CLI | `cube4siesta convert ...` | `cube4siesta convert --diff ...` |
+| fdf | `Rho.Restart true` | `Rho.Restart true`<br>`Rho.Restart.Diff true` |
+| What's transferred | ρ(r) itself | ρ(r) − ρ_atomic(r) |
+| Atomic part provided by | the source code (implicit in ρ) | SIESTA's own `rhoatm` |
+| Vulnerable to… | source/target pseudos disagreeing on which electrons are valence (e.g. V with vs without 3s/3p semicore) | pseudos agreeing on valence but differing in the *shape* of the atomic density near the nucleus (PAW vs NC, or different NC schemes) |
+
+Measured on our test cases:
+
+|  | Baseline SCF | Total-ρ restart | Diff-ρ restart |
+|---|---|---|---|
+| **SiC** (VASP PAW → Cornell NC, same valence) | −263.98 eV | **−264.54** | −284.06 |
+| **VSSe** (OpenMX 13-val V → Cornell 5-val V) | −696.61 eV | −540.92 | **−693.13** |
+
+Rule of thumb:
+
+- If both codes label the same electrons as valence → **total-ρ** is
+  simpler and more accurate.
+- If the source code uses a different core/valence partition (most
+  commonly: transition metal with semicore included on one side,
+  frozen on the other) → **diff-ρ** avoids the semicore mismatch at
+  the cost of introducing a smaller PAW-vs-NC atomic-shape mismatch.
+
 ## Quickstart for OpenMX users
 
 OpenMX writes `*.tden.cube` (total density) and `*.dden.cube`
 (ρ − ρ_atomic) by default.
 
-**Recommended path — difference density (works across pseudo choices)**
+**Recommended when you suspect valence mismatch — difference density**
 
 ```bash
 # 1. Run SIESTA once to fix the target mesh and obtain baseline values

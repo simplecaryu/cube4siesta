@@ -1,0 +1,8 @@
+# Atomic-superposition density: ICHARG=1 + NELM=0
+# Same POSCAR/POTCAR as the SCF run, no SCF performed.
+ICHARG = 1
+NELM   = 0
+LCHARG = .TRUE.
+LREAL  = Auto
+ISMEAR = 0 ; SIGMA = 0.1
+PREC   = Normal
