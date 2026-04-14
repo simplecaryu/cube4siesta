@@ -91,3 +91,32 @@ cube4siesta convert \
 # rho-restart
 mpirun -np 4 siesta < vsse_rr.fdf > vsse_rr.out
 ```
+
+## Update: difference-density mode resolves the mismatch
+
+Pipeline on the diff-density branch (`feat/diff-density-restart` of
+both repos):
+
+```bash
+# Convert OpenMX's already-computed ρ - ρ_atomic  (VSSe.dden.cube)
+cube4siesta convert \
+    --cube /path/to/VSSe.dden.cube \
+    --output vsse.RHOIN.diff \
+    --from-siesta-rho vsse.RHO \
+    --diff --verify
+
+# Inject it and ask SIESTA to add its own rhoatm back in
+# (add  Rho.Restart.Diff true  to vsse.fdf; file provided as vsse_rr_diff.fdf)
+mpirun -np 4 siesta < vsse_rr_diff.fdf > vsse_rr_diff.out
+```
+
+Results summary:
+
+| Quantity | Baseline SCF | Total-ρ restart | **Diff-ρ restart** |
+|----------|-------------|-----------------|----------------------|
+| E_KS (eV) | -696.6 | -540.9 | **-693.1** |
+| Fermi (eV) | -4.73 | +30.4 | **-3.37** |
+
+The 150-eV gap closes to ~3 eV, and Fermi returns to the physically
+sensible range. See `docs/issues/001-cross-pseudo-diff-density.md`
+for the full analysis.

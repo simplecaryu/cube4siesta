@@ -65,15 +65,30 @@ def cmd_convert(args: argparse.Namespace) -> int:
     volume = float(abs(np.linalg.det(target_cell)))
     dV = volume / (target_mesh[0] * target_mesh[1] * target_mesh[2])
     n_after = float(rho.sum() * dV)
-    print(f"[cube4siesta] integral after resample = {n_after:.6f} electrons")
 
-    if args.rescale_to is not None:
-        if n_after <= 0:
-            print("ERROR: cannot rescale, integrated rho is non-positive", file=sys.stderr)
+    if args.diff:
+        # Difference density: integral should be close to zero. SIESTA's
+        # Rho.Restart.Diff mode will add rhoatm back in on its own side.
+        print(f"[cube4siesta] diff-mode: integral ~ {n_after:+.3e} "
+              "(expected ~0 for a difference density)")
+        if abs(n_after) > 0.1:
+            print("WARNING: |integral| > 0.1 for a diff cube — are you sure this"
+                  " is ρ - ρ_atomic and not a total density?", file=sys.stderr)
+        if args.rescale_to is not None:
+            print("ERROR: --rescale-to is incompatible with --diff "
+                  "(diff densities must remain charge-neutral)", file=sys.stderr)
             return 2
-        scale = args.rescale_to / n_after
-        rho *= scale
-        print(f"[cube4siesta] rescaled by {scale:.6f} -> {args.rescale_to:.6f} electrons")
+    else:
+        print(f"[cube4siesta] integral after resample = {n_after:.6f} electrons")
+        if args.rescale_to is not None:
+            if n_after <= 0:
+                print("ERROR: cannot rescale, integrated rho is non-positive",
+                      file=sys.stderr)
+                return 2
+            scale = args.rescale_to / n_after
+            rho *= scale
+            print(f"[cube4siesta] rescaled by {scale:.6f} -> "
+                  f"{args.rescale_to:.6f} electrons")
 
     # Add a spin axis (nspin=1)
     rho_4d = rho[..., np.newaxis]
@@ -107,6 +122,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="interpolation order (1=trilinear, 3=cubic)")
     c.add_argument("--rescale-to", type=float,
                    help="rescale density so integral = this many electrons")
+    c.add_argument("--diff", action="store_true",
+                   help="treat the cube as a difference density (rho - rho_atomic)."
+                   " SIESTA's Rho.Restart.Diff mode adds rhoatm back in.")
     c.add_argument("--verify", action="store_true",
                    help="read back the written .RHO and check roundtrip")
     c.set_defaults(func=cmd_convert)
