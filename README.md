@@ -80,7 +80,7 @@ Installs two console scripts:
 ## Which mode should I use?
 
 Two modes are available, and they are **not** ordered by quality —
-each addresses a different failure.
+each fails in a different way.
 
 | | Total-ρ restart | Diff-ρ restart |
 |---|---|---|
@@ -88,23 +88,48 @@ each addresses a different failure.
 | fdf | `Rho.Restart true` | `Rho.Restart true`<br>`Rho.Restart.Diff true` |
 | What's transferred | ρ(r) itself | ρ(r) − ρ_atomic(r) |
 | Atomic part provided by | the source code (implicit in ρ) | SIESTA's own `rhoatm` |
-| Vulnerable to… | source/target pseudos disagreeing on which electrons are valence (e.g. V with vs without 3s/3p semicore) | pseudos agreeing on valence but differing in the *shape* of the atomic density near the nucleus (PAW vs NC, or different NC schemes) |
 
 Measured on our test cases:
 
-|  | Baseline SCF | Total-ρ restart | Diff-ρ restart |
+|  | Baseline SCF | Total-ρ | Diff-ρ |
 |---|---|---|---|
-| **SiC** (VASP PAW → Cornell NC, same valence) | −263.98 eV | **−264.54** | −284.06 |
-| **VSSe** (OpenMX 13-val V → Cornell 5-val V) | −696.61 eV | −540.92 | **−693.13** |
+| **SiC** (VASP PAW → Cornell NC, same valence) | −263.98 | **−264.54** | −284.06 |
+| **VSSe** (OpenMX 13-val V → Cornell 5-val V)  | −696.61 | −540.92 | **−693.13** |
 
-Rule of thumb:
+### Why diff-ρ can make things worse
 
-- If both codes label the same electrons as valence → **total-ρ** is
-  simpler and more accurate.
-- If the source code uses a different core/valence partition (most
-  commonly: transition metal with semicore included on one side,
-  frozen on the other) → **diff-ρ** avoids the semicore mismatch at
-  the cost of introducing a smaller PAW-vs-NC atomic-shape mismatch.
+Diff-ρ performs
+
+$$\rho_\text{inject} \;=\; \underbrace{(\rho_\text{scf}^\text{src} - \rho_\text{atom}^\text{src})}_{\text{from the cube}} \;+\; \underbrace{\rho_\text{atom}^\text{SIESTA}}_{\text{SIESTA's rhoatm}}
+\;=\; \rho_\text{scf}^\text{src} \;+\; \bigl(\rho_\text{atom}^\text{SIESTA} - \rho_\text{atom}^\text{src}\bigr).$$
+
+That last bracket is zero only if the source and target atomic
+densities are identical. They are identical exactly when both codes use
+the *same pseudopotential family* generated the same way; otherwise
+diff-ρ injects a spurious atomic-shape residual.
+
+Measured for SiC (both codes use 4+4 valence):
+
+- SIESTA `rhoatm` peak (Troullier-Martins NC): **0.260 e/Bohr³**
+- VASP `ρ_atomic` peak (PAW augmented): **0.588 e/Bohr³**
+- Pointwise peak |Δ|: **0.57 e/Bohr³** ⇒ ~20 eV total-energy error.
+
+So "same valence" is necessary but not sufficient to make diff mode a
+no-op. The frameworks have to agree on the *shape* of ρ_atomic too,
+and PAW ↔ NC do not.
+
+### Rule of thumb
+
+| Source code | Framework | Recommended |
+|---|---|---|
+| VASP | PAW | **total-ρ** (diff-ρ injects PAW↔NC shape error) |
+| Quantum ESPRESSO with NC pseudo | NC | total-ρ if valence matches SIESTA's; else diff-ρ |
+| OpenMX | NC | total-ρ if valence matches; **diff-ρ if source has semicore that SIESTA's pseudo freezes** |
+| OpenMX with same pseudo choice | NC | total-ρ (diff-ρ reduces to the same thing) |
+
+In short: diff-ρ only earns its keep when the valence partitions
+disagree *and* both sides are in the same pseudo family. In every
+other case prefer total-ρ.
 
 ## Quickstart for OpenMX users
 
