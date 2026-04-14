@@ -8,7 +8,7 @@ atoms, 54x54x343 cube produced by OpenMX 3.9 with PBE + spin polarization).
 OpenMX run in `/home/users2/cha/work/jx_spirit/tutorial/VSSe_1T/`,
 total density `VSSe.tden.cube` (13 MB).
 
-## Key observation: this is a **pseudopotential-mismatch** demo
+## Key observation: the two codes are transferring *different* ρ(r)
 
 The mechanism runs to completion, but the output is physically
 degraded. Comparing:
@@ -17,18 +17,26 @@ degraded. Comparing:
 |----------|-----------------|-------------------|
 | E_KS (eV) | -696.6 | -540.9 |
 | Fermi (eV) | -4.73 | +30.4 |
-| N_e       | 17 (V 5 + S 6 + Se 6) | 25 raw / 17 after rescale |
+| ∫ρ dV (N_e) | 17 (V 5 + S 6 + Se 6) | 25 raw / 17 after rescale |
 
-The 150 eV energy offset is **not** a bug in Rho.Restart. It is the
-direct consequence of OpenMX and the Cornell NNIN V.psf using different
-valence configurations:
+A natural first reaction: "we're transferring real-space ρ(r), what
+does pseudo valence *count* have to do with it?" — and that is right
+in the abstract. The subtlety is that *ρ(r) itself is defined by
+what each code considers valence*. ρ is a scalar field, but a
+scalar field of what? "Valence electron density". Change the
+partition and you change the field.
 
-- OpenMX's V_PBE19 treats V 3s / 3p as *valence* (13 valence electrons
-  in total), so the cube density has a pronounced peak in the semicore
-  region around V.
-- Cornell NNIN `V-gga.psf` freezes V 3s / 3p into the core (5 valence
-  electrons), so SIESTA's Hamiltonian has no states to occupy at those
-  energies.
+- **Not a format issue.** The Cornell NNIN `V.psf` parses fine; the
+  SIESTA baseline run converges cleanly (E_KS = -696 eV, 32 SCF
+  steps). The psf header format matches SIESTA's own pseudos in
+  `Tests/Pseudos/` exactly (`ATM ... Troullier-Martins`).
+- **A physics issue.** OpenMX's V_PBE19 pseudo treats V 3s/3p as
+  *valence*, so the OpenMX cube contains a pronounced 8-electron
+  peak in the semicore region around V (the same 3s/3p charge
+  distribution that a full-core all-electron calculation would also
+  contain). Cornell NNIN `V-gga.psf` freezes 3s/3p into the ionic
+  core, so SIESTA's ρ_valence(r) for the same physical atom does
+  NOT contain that peak. These are literally different scalar fields.
 
 Rescaling the integral from 25 to 17 electrons with cube4siesta's
 `--rescale-to 17.0` is a uniform multiplicative fix that does **not**
@@ -39,15 +47,24 @@ one-shot Fermi level lands somewhere absurd.
 
 ## Conclusion
 
-Cross-code rho restart requires pseudo-level compatibility. For a
-physically useful cross-code pipeline one needs **matching core/valence
-partitioning** on both sides — either use a V pseudo with the same
-semicore treatment on the SIESTA side, or regenerate the OpenMX
-calculation with a frozen-core V pseudopotential.
+Cross-code ρ restart is physically meaningful only when the source
+and target codes call the *same set of electrons* valence. For VSSe
+with these two pseudos they don't, so the scalar field ρ_openmx(r)
+and the scalar field ρ_siesta(r) that the SCF expects are
+inherently different quantities — no grid resampling or
+renormalization turns one into the other.
+
+Paths to make this physical:
+1. Regenerate the SIESTA-side V pseudopotential (e.g. via ATOM)
+   with the same configuration as OpenMX's V_PBE19 (3s, 3p as
+   valence); or
+2. Rerun the OpenMX calculation with a frozen-core V pseudo that
+   matches Cornell NNIN's 5-valence choice.
 
 For SiC (`examples/sic_vasp/`) the VASP PAW and Cornell NNIN
-`C.psf`/`Si.psf` happen to agree closely on core/valence, so that case
-lands within 0.5 eV of a fully converged SIESTA SCF.
+`C.psf`/`Si.psf` happen to agree on core/valence, so that case
+lands within ~0.5 eV of a fully converged SIESTA SCF — close
+enough to serve as a seed for continued SCF.
 
 ## Files
 
