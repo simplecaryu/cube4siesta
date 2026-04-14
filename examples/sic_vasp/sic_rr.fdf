@@ -1,0 +1,43 @@
+SystemLabel            sic_rr
+SystemName             SiC FCC
+
+NumberOfAtoms          2
+NumberOfSpecies        2
+%block ChemicalSpeciesLabel
+  1  14  Si
+  2   6  C
+%endblock ChemicalSpeciesLabel
+
+# FCC zincblende SiC, a = 4.35 Ang (as in VASP CHGCAR)
+LatticeConstant        4.35 Ang
+%block LatticeVectors
+ 0.5 0.5 0.0
+ 0.0 0.5 0.5
+ 0.5 0.0 0.5
+%endblock LatticeVectors
+
+AtomicCoordinatesFormat   Fractional
+%block AtomicCoordinatesAndAtomicSpecies
+ 0.000000 0.000000 0.000000  1   Si
+ 0.246552 0.253448 0.246552  2   C
+%endblock AtomicCoordinatesAndAtomicSpecies
+
+PAO.BasisSize          DZP
+MeshCutoff             200. Ry
+xc.functional          GGA
+xc.authors             PBE
+
+%block kgrid_Monkhorst_Pack
+  6 0 0 0.5
+  0 6 0 0.5
+  0 0 6 0.5
+%endblock kgrid_Monkhorst_Pack
+
+MaxSCFIterations       50
+DM.MixingWeight        0.25
+DM.Tolerance           1.d-4
+SaveRho                true
+WriteEigenvalues       true
+
+Rho.Restart      true
+Rho.RestartFile  sic.RHOIN
