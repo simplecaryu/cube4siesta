@@ -77,154 +77,154 @@ Installs two console scripts:
 
 ---
 
-## Which mode should I use?
+## How injection actually works
 
-Two modes are available, and they are **not** ordered by quality —
-each fails in a different way.
+Every run of `Rho.Restart` in SIESTA ends up calling
 
-| | Total-ρ restart | Diff-ρ restart |
-|---|---|---|
-| CLI | `cube4siesta convert ...` | `cube4siesta convert --diff ...` |
-| fdf | `Rho.Restart true` | `Rho.Restart true`<br>`Rho.Restart.Diff true` |
-| What's transferred | ρ(r) itself | ρ(r) − ρ_atomic(r) |
-| Atomic part provided by | the source code (implicit in ρ) | SIESTA's own `rhoatm` |
+$$\rho_\text{inject}(r) \;=\; \rho_\text{file}(r) \;+\; [\text{optional}]\;\rho_\text{atom}^\text{SIESTA}(r),$$
 
-Measured on our test cases:
+where the optional atomic term is added whenever you set
+`Rho.Restart.Diff true`. Everything else — the numerical quality of the
+seed DM that comes out — depends only on what you put into
+`ρ_file(r)`. There are three useful choices, and they are strictly
+ordered by robustness:
 
-|  | Baseline SCF | Total-ρ | Diff-ρ |
-|---|---|---|---|
-| **SiC** (VASP PAW → Cornell NC, same valence) | −263.98 | **−264.54** | −284.06 |
-| **VSSe** (OpenMX 13-val V → Cornell 5-val V)  | −696.61 | −540.92 | **−693.13** |
+### Choice 1 — total density (simplest)
 
-### Why diff-ρ can make things worse
+```
+ρ_file := ρ_scf^src
+```
 
-Diff-ρ performs
+Plain `cube4siesta convert ...` with no `--diff`, and no
+`Rho.Restart.Diff` on the SIESTA side. The SCF density from the source
+code is injected directly; SIESTA treats it as its own valence density.
 
-$$\rho_\text{inject} \;=\; \underbrace{(\rho_\text{scf}^\text{src} - \rho_\text{atom}^\text{src})}_{\text{from the cube}} \;+\; \underbrace{\rho_\text{atom}^\text{SIESTA}}_{\text{SIESTA's rhoatm}}
-\;=\; \rho_\text{scf}^\text{src} \;+\; \bigl(\rho_\text{atom}^\text{SIESTA} - \rho_\text{atom}^\text{src}\bigr).$$
+Failure mode: if the source and SIESTA disagree on *which electrons are
+valence* (e.g. V with semicore vs V with frozen 3s/3p), the scalar
+field doesn't match SIESTA's Hamiltonian at all.
 
-That last bracket is zero only if the source and target atomic
-densities are identical. They are identical exactly when both codes use
-the *same pseudopotential family* generated the same way; otherwise
-diff-ρ injects a spurious atomic-shape residual.
+### Choice 2 — diff against SIESTA's own atomic density (**recommended**)
 
-Measured for SiC (both codes use 4+4 valence):
+```
+ρ_file := ρ_scf^src − ρ_atom^SIESTA       # subtracted on the cube4siesta side
+ρ_inject := ρ_file + ρ_atom^SIESTA         # added back by SIESTA
+         := ρ_scf^src                      # identical to Choice 1 by construction
+```
 
-- SIESTA `rhoatm` peak (Troullier-Martins NC): **0.260 e/Bohr³**
-- VASP `ρ_atomic` peak (PAW augmented): **0.588 e/Bohr³**
-- Pointwise peak |Δ|: **0.57 e/Bohr³** ⇒ ~20 eV total-energy error.
+`cube4siesta convert --diff --subtract <SIESTA rhoatm cube>` with
+`Rho.Restart.Diff true` on the SIESTA side. When the pseudos agree on
+valence this is numerically identical to Choice 1 — the patch is a
+true **no-op relative to total-ρ**. It is strictly no worse than
+Choice 1 in any case.
 
-So "same valence" is necessary but not sufficient to make diff mode a
-no-op. The frameworks have to agree on the *shape* of ρ_atomic too,
-and PAW ↔ NC do not.
+### Choice 3 — diff against the *source*'s own atomic density (specialized)
+
+```
+ρ_file := ρ_scf^src − ρ_atom^src           # source-side subtraction (e.g. OpenMX *.dden.cube)
+ρ_inject := ρ_file + ρ_atom^SIESTA
+         := ρ_scf^src + (ρ_atom^SIESTA − ρ_atom^src)
+```
+
+`cube4siesta convert --diff` with `Rho.Restart.Diff true`. The residual
+`(ρ_atom^SIESTA − ρ_atom^src)` lives near the nuclei and is nonzero
+whenever the pseudos disagree — either on valence partition (the win
+case) or on pseudized-atomic shape (the loss case, e.g. PAW vs NC).
+
+Useful **only** when the source code has semicore valence that
+SIESTA's pseudo freezes, and both sides are in the same pseudo family
+(e.g. OpenMX NC with V 3s/3p valence → SIESTA NC with V 3s/3p frozen).
+In that specific regime it selectively removes the semicore peak that
+SIESTA can't describe; outside that regime it just injects a local
+shape mismatch.
+
+### Measured
+
+| | Baseline SCF | Choice 1 (total) | Choice 2 (diff vs SIESTA) | Choice 3 (diff vs source) |
+|---|---|---|---|---|
+| SiC (VASP PAW, 4+4 val, matches SIESTA) | −263.98 | **−264.54** | **−264.54** | −284.06 |
+| VSSe (OpenMX 13-val V → SIESTA 5-val V) | −696.61 | −540.92 | −540.92 | **−693.13** |
+
+Choice 2 numerically tracks Choice 1 exactly, which is the right answer
+in the matching case (SiC) and still terrible in the mismatch case
+(VSSe) — so Choice 2 is safe but can't work around a semicore
+disagreement. Only Choice 3 fixes VSSe, but only when the rest of the
+pseudo setup is similar enough.
 
 ### Rule of thumb
 
-| Source code | Framework | Recommended |
-|---|---|---|
-| VASP | PAW | **total-ρ** (diff-ρ injects PAW↔NC shape error) |
-| Quantum ESPRESSO with NC pseudo | NC | total-ρ if valence matches SIESTA's; else diff-ρ |
-| OpenMX | NC | total-ρ if valence matches; **diff-ρ if source has semicore that SIESTA's pseudo freezes** |
-| OpenMX with same pseudo choice | NC | total-ρ (diff-ρ reduces to the same thing) |
+| Situation | Recommendation |
+|-----------|----------------|
+| You trust the two pseudos agree on valence | **Choice 1 or 2** (pick whichever is easier — same numerical answer) |
+| Source has semicore valence that SIESTA freezes, both sides NC | **Choice 3** |
+| Source is PAW (VASP) | **Choice 1 or 2** — never Choice 3 |
 
-In short: diff-ρ only earns its keep when the valence partitions
-disagree *and* both sides are in the same pseudo family. In every
-other case prefer total-ρ.
+## Quickstart — the universal recipe (works for any source code)
 
-## Quickstart for OpenMX users
-
-OpenMX writes `*.tden.cube` (total density) and `*.dden.cube`
-(ρ − ρ_atomic) by default.
-
-**Recommended when you suspect valence mismatch — difference density**
+This is Choice 1 or 2 from the previous section; the two are
+numerically identical when the pseudos agree on valence (the common
+case), so pick whichever is easier to script.
 
 ```bash
-# 1. Run SIESTA once to fix the target mesh and obtain baseline values
-mpirun -np 4 siesta < your.fdf > base.out           # writes your.RHO
+# Step 1. Source code produces a cube of rho_scf(r) in e/Bohr^3.
+#   OpenMX:  *.tden.cube is written by default.
+#   VASP:    python -c "from cube4siesta.vasp_io import chgcar_to_cube; \
+#                        chgcar_to_cube('CHGCAR','scf.cube')"
+#   QE / ...: use their own cube output option or ase.io.cube.
 
-# 2. Convert OpenMX's difference-density cube onto SIESTA's mesh
-cube4siesta convert \
-    --cube path/to/System.dden.cube \
-    --output your.RHOIN.diff \
-    --from-siesta-rho your.RHO \
-    --diff --verify
+# Step 2. Run SIESTA once to fix the target mesh.
+#   (Any modest SCF with your.fdf will do; we just need the .RHO
+#    for its cell+mesh metadata.)
+mpirun -np 4 siesta < your.fdf > base.out       # writes your.RHO
 
-# 3. Run SIESTA with Rho.Restart + Rho.Restart.Diff
-#
-#    Add to your.fdf:
-#      Rho.Restart       true
-#      Rho.Restart.Diff  true
-#      Rho.RestartFile   your.RHOIN.diff
-#
-mpirun -np 4 siesta < your.fdf > rr.out
-```
-
-See `examples/vsse_openmx/` for a worked example on a Janus VSSe
-monolayer.
-
-**Simpler path — total density (only OK when pseudo choices match)**
-
-```bash
-cube4siesta convert \
-    --cube path/to/System.tden.cube \
+# Step 3a. Choice 1 — feed the total density directly
+cube4siesta convert --cube scf.cube \
     --output your.RHOIN \
     --from-siesta-rho your.RHO --verify
+# fdf: Rho.Restart true, Rho.RestartFile your.RHOIN  (no Rho.Restart.Diff)
 
-# fdf: Rho.Restart true, Rho.RestartFile your.RHOIN  (leave Rho.Restart.Diff off)
+# Step 3b. Choice 2 — SIESTA-consistent diff (a no-op vs Choice 1 when
+#          pseudos match, cheap insurance otherwise)
+#   First extract SIESTA's own rhoatm on the same mesh:
+cat your.fdf analyze.fdf > run_rhoatm.fdf   # with  AnalyzeChargeDensityOnly  true
+mpirun -np 4 siesta < run_rhoatm.fdf > rhoatm.out   # writes your.RHO (= rhoatm)
+
+cube4siesta convert --cube scf.cube \
+    --output your.RHOIN.diff \
+    --from-siesta-rho your.RHO \
+    --diff --subtract your.RHO --verify
+# fdf: Rho.Restart true, Rho.Restart.Diff true, Rho.RestartFile your.RHOIN.diff
 ```
+
+See `examples/sic_vasp/` for a worked end-to-end run on zincblende
+SiC (Choice 1 and Choice 2 give identical numbers there).
 
 ---
 
-## Quickstart for VASP users
+## When you need Choice 3: semicore mismatch
 
-VASP doesn't output a difference density directly, but you can get one
-cheaply with a second no-SCF run.
+Use this path only when you know that your source code treats more
+electrons as valence than your SIESTA `.psf` does (e.g. OpenMX
+`V_PBE19` with 13 valence electrons going into a run whose Cornell NNIN
+`V.psf` has only 5). In that specific case the source's own atomic
+density carries the semicore peaks as part of the "atomic" reference;
+subtracting it cancels those peaks out of the cube, and SIESTA's own
+valence-only `rhoatm` is the correct field to re-add.
+
+For OpenMX this requires only a single extra file — `*.dden.cube` is
+written automatically:
 
 ```bash
-# 1. Run a normal VASP SCF and keep CHGCAR
-cp INCAR.my_scf INCAR
-vasp_std
-cp CHGCAR CHGCAR.scf
-
-# 2. Run VASP again with ICHARG=1 and NELM=0 — atomic superposition, no SCF
-cat > INCAR <<'EOF'
-ICHARG = 1
-NELM   = 0
-LCHARG = .TRUE.
-EOF
-vasp_std
-cp CHGCAR CHGCAR.atomic
-
-# 3. Build the Δρ cube
-cube4siesta-vasp-diff \
-    --scf    CHGCAR.scf \
-    --atomic CHGCAR.atomic \
-    --out    dden.cube
-
-# 4. Run SIESTA once for the baseline mesh, then convert + restart
-mpirun -np 4 siesta < your.fdf > base.out
-
-cube4siesta convert --cube dden.cube --output your.RHOIN.diff \
+cube4siesta convert --cube /path/to/System.dden.cube \
+    --output your.RHOIN.diff \
     --from-siesta-rho your.RHO --diff --verify
-
-# add:  Rho.Restart true  /  Rho.Restart.Diff true  /  Rho.RestartFile your.RHOIN.diff
-mpirun -np 4 siesta < your.fdf > rr.out
+# fdf: Rho.Restart true, Rho.Restart.Diff true, Rho.RestartFile your.RHOIN.diff
 ```
 
-If you *know* your VASP pseudopotential and your SIESTA `.psf` agree
-on core/valence (e.g. a PBE PAW with no semicore vs a plain NC .psf
-on the same element), you can skip the atomic-superposition run and
-inject the raw CHGCAR as a total density:
-
-```bash
-python -c "from cube4siesta.vasp_io import chgcar_to_cube; \
-           chgcar_to_cube('CHGCAR', 'out.cube')"
-cube4siesta convert --cube out.cube --output your.RHOIN \
-    --from-siesta-rho your.RHO --verify
-```
-
-See `examples/sic_vasp/` for a worked example on zincblende SiC
-(from the VASP 6.5 testsuite).
+For VASP (Choice 3 almost never helps because VASP is PAW — prefer
+Choice 1 or 2) you would build the analogue with two VASP runs and
+`cube4siesta-vasp-diff`; see `examples/sic_vasp/diff/README.md` for an
+instrumented demo that also illustrates why this is a bad idea when
+the frameworks differ.
 
 ---
 

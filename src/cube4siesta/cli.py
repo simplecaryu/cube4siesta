@@ -61,6 +61,27 @@ def cmd_convert(args: argparse.Namespace) -> int:
         rho = resample_to_mesh(cube.data, target_mesh, order=args.order).astype(np.float32)
         print(f"[cube4siesta] resampled {cube.mesh} -> {target_mesh} (order={args.order})")
 
+    # Subtract a reference density if requested.
+    # Use case: the "safe diff" workflow where the reference is SIESTA's own
+    # rhoatm. When paired with Rho.Restart.Diff on the SIESTA side this
+    # recovers the source total density exactly — i.e. a no-op relative to
+    # total-ρ mode when the valence partitions match.
+    if args.subtract is not None:
+        ref_path = Path(args.subtract)
+        if ref_path.suffix.lower() in (".rho", ".rhoin", ".rhoref"):
+            ref = read_rho(ref_path)
+            ref_data = ref.rho[..., 0]
+            ref_mesh = ref.mesh
+        else:
+            from .cube_io import read_cube as _read_cube
+            ref_cube = _read_cube(ref_path)
+            ref_data = ref_cube.data
+            ref_mesh = ref_cube.mesh
+        if tuple(ref_mesh) != tuple(target_mesh):
+            ref_data = resample_to_mesh(ref_data, target_mesh, order=args.order)
+        rho = (rho - ref_data).astype(np.float32)
+        print(f"[cube4siesta] subtracted reference density from {args.subtract}")
+
     # Charge normalization
     volume = float(abs(np.linalg.det(target_cell)))
     dV = volume / (target_mesh[0] * target_mesh[1] * target_mesh[2])
@@ -125,6 +146,10 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--diff", action="store_true",
                    help="treat the cube as a difference density (rho - rho_atomic)."
                    " SIESTA's Rho.Restart.Diff mode adds rhoatm back in.")
+    c.add_argument("--subtract",
+                   help="subtract a reference cube or .RHO before writing."
+                   " use e.g. SIESTA's atomic-superposition .RHO so that diff"
+                   " mode reduces to total-ρ exactly when pseudos match.")
     c.add_argument("--verify", action="store_true",
                    help="read back the written .RHO and check roundtrip")
     c.set_defaults(func=cmd_convert)
