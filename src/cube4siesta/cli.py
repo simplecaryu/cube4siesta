@@ -48,6 +48,12 @@ def cmd_convert(args: argparse.Namespace) -> int:
         target_mesh = args.target_mesh
         target_cell = cube.cell
         print(f"[cube4siesta] target mesh (user): {target_mesh}")
+    elif args.mesh_cutoff is not None:
+        from .mesh import siesta_mesh
+        target_mesh = siesta_mesh(cube.cell, mesh_cutoff=args.mesh_cutoff)
+        target_cell = cube.cell
+        print(f"[cube4siesta] target mesh from MeshCutoff={args.mesh_cutoff} Ry: "
+              f"{target_mesh}")
     else:
         target_mesh = cube.mesh
         target_cell = cube.cell
@@ -131,6 +137,9 @@ def main(argv: list[str] | None = None) -> int:
     grp.add_argument("--target-mesh", type=_parse_mesh,
                      help="target mesh as Nx,Ny,Nz (else cube's own mesh)")
     grp.add_argument("--from-siesta-rho", help="borrow target mesh+cell from an existing .RHO")
+    grp.add_argument("--mesh-cutoff", type=float,
+                     help="predict SIESTA mesh from MeshCutoff in Ry (no SIESTA run needed)."
+                     " Uses the cube's cell vectors.")
     c.add_argument("--order", type=int, default=1,
                    help="interpolation order (1=trilinear, 3=cubic)")
     c.add_argument("--rescale-to", type=float,
