@@ -1,0 +1,209 @@
+diff --git a/Src/Makefile b/Src/Makefile
+index 2d25c6f..adcd3ed 100644
+--- a/Src/Makefile
++++ b/Src/Makefile
+@@ -118,7 +118,7 @@ OBJS =  automatic_cell.o atom_options.o \
+         cart2frac.o obc.o \
+         precision.o sys.o m_cell.o files.o \
+         spatial.o parallel.o parallelsubs.o  parsing.o chemical.o atom.o atmparams.o \
+-        m_mpi_utils.o fdf_extra.o m_iorho.o  \
++        m_mpi_utils.o fdf_extra.o m_iorho.o m_rho_restart.o \
+         atmfuncs.o listsc.o memoryinfo.o m_memory.o sorting.o \
+         atomlist.o atm_types.o old_atmfuncs.o radial.o \
+         alloc.o spher_harm.o periodic_table.o version.o timestamp.o \
+@@ -687,7 +687,7 @@ dftu_specs.o: basis_specs.o basis_types.o interpolation.o m_cite.o parallel.o
+ dftu_specs.o: precision.o pseudopotential.o radial.o sys.o units.o
+ dhscf.o: alloc.o atmfuncs.o delk.o dfscf.o dipole.o doping_uniform.o files.o
+ dhscf.o: forhar.o iogrid_netcdf.o m_charge_add.o m_efield.o m_hartree_add.o
+-dhscf.o: m_iorho.o m_mesh_node.o m_ncdf_io.o m_ncdf_siesta.o
++dhscf.o: m_iorho.o m_mesh_node.o m_ncdf_io.o m_ncdf_siesta.o m_rho_restart.o
+ dhscf.o: m_partial_charges.o m_rhog.o m_spin.o m_ts_electype.o
+ dhscf.o: m_ts_global_vars.o m_ts_hartree.o m_ts_options.o m_ts_voltage.o mesh.o
+ dhscf.o: meshdscf.o meshsubs.o moremeshsubs.o parallel.o parsing.o precision.o
+@@ -866,6 +866,7 @@ m_iodm.o: m_io_s.o m_os.o parallel.o
+ m_iodm_old.o: alloc.o files.o m_matio.o m_mpi_utils.o parallel.o parallelsubs.o
+ m_iodm_old.o: precision.o sparse_matrices.o sys.o
+ m_iorho.o: alloc.o parallel.o parallelsubs.o precision.o sys.o
++m_rho_restart.o: m_iorho.o parallel.o precision.o siesta_options.o sys.o
+ m_iostruct.o: alloc.o files.o m_mpi_utils.o parallel.o precision.o
+ m_iostruct.o: siesta_geom.o sys.o units.o
+ m_kinetic.o: precision.o
+diff --git a/Src/dhscf.F b/Src/dhscf.F
+index 803a0ca..42e23e5 100644
+--- a/Src/dhscf.F
++++ b/Src/dhscf.F
+@@ -651,6 +651,8 @@ C     Modules
+       use siesta_options, only: savebader
+       use siesta_options, only: read_deformation_charge_cdf
+       use siesta_options, only: mix_charge
++      use siesta_options, only: rho_restart
++      use m_rho_restart,  only: inject_rho_from_file
+ 
+       use m_efield,       only: add_potential_from_field
+       use m_efield,       only: user_specified_field, acting_efield
+@@ -897,6 +899,10 @@ C ----------------------------------------------------------------------
+          call rhofft(cell, ntml(1), ntml(2), ntml(3), ntm, nspin,
+      $                  DRho,rhog_in,BACKWARD)
+ 
++      else if (rho_restart) then
++         ! Inject density from an external .RHO file (Rho.Restart mode).
++         ! Replaces the usual DM -> rho (rhoofd) path with a one-shot read.
++         call inject_rho_from_file(cell, ntm, nsm, ntpl, nspin, DRho)
+       else if (read_charge_cdf) then
+          call read_grid_netcdf(ntm(1:3),nspin,ntpl,DRho,"Rho")
+          read_charge_cdf = .false.
+diff --git a/Src/m_rho_restart.F90 b/Src/m_rho_restart.F90
+new file mode 100644
+index 0000000..d0abf78
+--- /dev/null
++++ b/Src/m_rho_restart.F90
+@@ -0,0 +1,88 @@
++! ---
++! SIESTA rho-based restart: read an external .RHO file and substitute
++! the real-space density in place of the usual DM -> rho (rhoofd) step.
++!
++! Works in tandem with the Rho.Restart fdf flag declared in siesta_options
++! and forced to single-step behaviour in read_options.
++!
++! MVP restrictions:
++!   - Global mesh must match the current run's mesh exactly
++!     (no interpolation yet; fail loudly on mismatch).
++!   - nspin = 1 targeted; collinear-spin paths left for a follow-up.
++! ---
++module m_rho_restart
++
++  use precision,     only : dp, grid_p
++  use parallel,      only : Node, IONode
++  use sys,           only : die
++  use m_iorho,       only : read_rho
++  use siesta_options, only : rho_restart, rho_restart_file
++
++  implicit none
++
++  private
++  public :: inject_rho_from_file
++
++contains
++
++  !> Fill DRho(ntpl,nspin) with the density read from an external .RHO file.
++  !> Caller guarantees DRho is already allocated with the UNIFORM mesh
++  !> distribution (same layout as SIESTA's own read path at dhscf.F:900).
++  subroutine inject_rho_from_file(cell, ntm, nsm, ntpl, nspin, DRho)
++    real(dp),     intent(in)    :: cell(3,3)       ! current run's cell (Bohr)
++    integer,      intent(in)    :: ntm(3)          ! current run's global mesh
++    integer,      intent(in)    :: nsm             ! sub-mesh points per mesh point
++    integer,      intent(in)    :: ntpl            ! local mesh points
++    integer,      intent(in)    :: nspin
++    real(grid_p), intent(out)   :: DRho(ntpl,nspin)
++
++    real(dp)  :: file_cell(3,3)
++    integer   :: file_mesh(3)
++    integer   :: i, j
++
++    ! read_rho expects file_mesh to be populated with the current run's mesh
++    ! for its MPI block-setup arithmetic; it then verifies/overwrites from
++    ! the file header. Pass the current mesh so the distribution matches.
++    file_mesh = ntm
++
++    if (IONode) then
++      write(6,'(/a)') '=== Rho.Restart: injecting external density ==='
++      write(6,'(a,a)') 'rho_restart: reading file ', trim(rho_restart_file)
++      write(6,'(a,3i5)') 'rho_restart: expected global mesh ', ntm
++      write(6,'(a,i4)') 'rho_restart: nspin = ', nspin
++    end if
++
++    call read_rho(trim(rho_restart_file), file_cell, file_mesh, nsm, &
++                  ntpl, nspin, DRho)
++
++    ! Sanity check: mesh must match (MVP).
++    if (any(file_mesh /= ntm)) then
++      if (IONode) then
++        write(6,'(a,3i6)') 'rho_restart: FILE mesh = ', file_mesh
++        write(6,'(a,3i6)') 'rho_restart: RUN  mesh = ', ntm
++      end if
++      call die('inject_rho_from_file: mesh mismatch. MVP requires ' // &
++               'identical grids. Use cube4siesta to resample first.')
++    end if
++
++    ! Sanity check: cell agreement within loose tolerance (10^-4 Bohr)
++    do i = 1, 3
++      do j = 1, 3
++        if (abs(file_cell(j,i) - cell(j,i)) > 1.0e-4_dp) then
++          if (IONode) then
++            write(6,'(a)') 'rho_restart: cell mismatch between file and run'
++            write(6,'(a,9f12.6)') '  file: ', file_cell
++            write(6,'(a,9f12.6)') '  run:  ', cell
++          end if
++          call die('inject_rho_from_file: cell vectors disagree')
++        end if
++      end do
++    end do
++
++    if (IONode) then
++      write(6,'(a)') 'rho_restart: external density loaded successfully'
++    end if
++
++  end subroutine inject_rho_from_file
++
++end module m_rho_restart
+diff --git a/Src/read_options.F90 b/Src/read_options.F90
+index de0c505..4966c2e 100644
+--- a/Src/read_options.F90
++++ b/Src/read_options.F90
+@@ -651,6 +651,19 @@ subroutine read_options( na, ns, nspin )
+           value=usesavedm, dictRef='siesta:usesavedm')
+   endif
+ 
++  ! Rho-based restart: read rho(r) from an external .RHO file and perform
++  ! one SCF step (rho -> V_KS -> H -> diag -> DM) before stopping.
++  ! Useful to seed DM from densities produced by other codes (VASP/QE, via
++  ! the cube4siesta tool).
++  rho_restart = fdf_get('Rho.Restart', .false.)
++  rho_restart_file = fdf_get('Rho.RestartFile', trim(slabel)//'.RHOIN')
++  if (ionode) then
++     write(6,1) 'redata: Rho.Restart (one-step from external rho)', rho_restart
++     if (rho_restart) then
++        write(6,'(a,t44,a)') 'redata: Rho restart file ', trim(rho_restart_file)
++     end if
++  end if
++
+   ! Neglect Interactions between non-overlapping orbitals ...
+   negl = fdf_get('NeglNonOverlapInt',.false.)
+   if (ionode) then
+@@ -1488,6 +1501,21 @@ subroutine read_options( na, ns, nspin )
+      end if
+   endif
+ 
++  ! If Rho.Restart is on, force one-shot behaviour: a single SCF step
++  ! starting from the injected rho, no convergence enforcement, no DM
++  ! continuation (we skip the .DM read), no mixing.
++  if (rho_restart) then
++     nscf            = 1
++     usesavedm       = .false.
++     mix_scf_first   = .false.
++     mix_charge      = .false.
++     SCFMustConverge = .false.
++     if (ionode) then
++        write(6,'(a)') 'redata: Rho.Restart -> nscf=1, usesavedm=F, &
++             &SCFMustConverge=F'
++     end if
++  end if
++
+   ! Warn the user about deprecated symbols...
+   call deprecated('Optim.Broyden.History.Steps')
+   call deprecated('Optim.Broyden.Cycle.On.Maxit')
+diff --git a/Src/siesta_options.F90 b/Src/siesta_options.F90
+index 142b7e0..b5d21bf 100644
+--- a/Src/siesta_options.F90
++++ b/Src/siesta_options.F90
+@@ -219,6 +219,10 @@ MODULE siesta_options
+   
+   character(len=164) :: sname   ! System name, used to initialise read
+ 
++  ! Rho-based restart: load density from .RHOIN, run one SCF step, stop.
++  logical :: rho_restart             ! Enable rho-restart mode
++  character(len=512) :: rho_restart_file ! Path to input .RHO file
++
+   integer,  parameter :: SOLVE_DIAGON = 0
+   integer,  parameter :: SOLVE_ORDERN = 1
+   integer,  parameter :: SOLVE_TRANSI = 2
