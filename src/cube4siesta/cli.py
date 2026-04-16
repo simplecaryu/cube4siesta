@@ -92,6 +92,34 @@ def cmd_convert(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gen_atom_input(args: argparse.Namespace) -> int:
+    from .gen_psf import parse_openmx_vps, parse_qe_upf, write_atom_input
+
+    if args.from_vps:
+        params = parse_openmx_vps(args.from_vps)
+        source = args.from_vps
+    else:
+        params = parse_qe_upf(args.from_upf)
+        source = args.from_upf
+
+    content = write_atom_input(params, args.output)
+
+    print(f"[cube4siesta] parsed {source}")
+    print(f"    element: {params.symbol} (Z={params.z})")
+    print(f"    XC: {params.xc}  relativistic: {params.relativistic}")
+    print(f"    core shells: {params.n_core_shells}")
+    print(f"    valence: {params.n_valence_electrons:.0f} electrons in "
+          f"{len(params.valence)} channels")
+    for v in params.valence:
+        print(f"      {v.n}{_L_LABELS[v.l]}  occ={v.occ:.2f}  rc={v.rc:.2f}")
+    print(f"[cube4siesta] wrote {args.output}")
+    print(f"\nTo generate .psf, run:  sh /path/to/atom/bin/pg.sh {args.output}")
+    return 0
+
+
+_L_LABELS = "spdf"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cube4siesta")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -110,6 +138,15 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--verify", action="store_true",
                    help="read back the written .RHO and check roundtrip")
     c.set_defaults(func=cmd_convert)
+
+    # --- gen-atom-input subcommand ---
+    g = sub.add_parser("gen-atom-input",
+                       help="Generate ATOM .inp from a source pseudo file")
+    src = g.add_mutually_exclusive_group(required=True)
+    src.add_argument("--from-vps", help="OpenMX .vps file")
+    src.add_argument("--from-upf", help="Quantum ESPRESSO .UPF file")
+    g.add_argument("--output", required=True, help="output ATOM .inp path")
+    g.set_defaults(func=cmd_gen_atom_input)
 
     args = parser.parse_args(argv)
     return args.func(args)
