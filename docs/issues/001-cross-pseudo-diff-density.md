@@ -1,7 +1,8 @@
 # Issue #1: cross-pseudo ρ restart via difference density
 
 ## Status
-Open — **implementation in progress** on branch `feat/diff-density-restart`.
+**Resolved** on branch `feat/diff-density-restart` (both repos).
+Three injection modes now available (Choice 1/2/3); see README.
 
 ## Problem
 
