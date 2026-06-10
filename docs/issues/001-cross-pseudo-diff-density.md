@@ -72,6 +72,25 @@ SIESTA baseline with the standard 5-valence V.psf:
 | mean \|Δband\| occupied | 26.9 eV | **0.21 eV** |
 | DM relative Frobenius | 1.49 | **0.103** |
 
+**The NC-vs-PAW axis is code- and basis-independent** — verified by a
+third source: Quantum ESPRESSO 7.5 with ONCV (pseudo-dojo NC) pseudos,
+i.e. a plane-wave code like VASP but with norm-conserving densities
+(`pp.x plot_num=9` gives ρ − ρ_atomic natively). VSSe Δρ relFrob vs
+the same baseline:
+
+| Δρ source | basis | density type | relFrob | E_F-aligned bands |
+|---|---|---|---|---|
+| OpenMX | LCAO | NC | 0.103 | 0.20 eV |
+| QE/ONCV | plane wave | NC | 0.190 | 0.51 eV |
+| VASP | plane wave | PAW | 1.410 | (collapse class) |
+
+Both NC sources produce a clean, charge-neutral Δρ field
+(∫|Δρ| ≈ 1 e) and work; the PAW field (∫|Δρ| = 8.3 e) does not. The
+QE case even carries a *larger* partition mismatch (ONCV V 13 e and
+Se 16 e → 35 e total vs SIESTA's 17 e) and still lands in the working
+class — what matters is the density type, not the basis or the size of
+the mismatch.
+
 When to use which (measured, not guessed):
 
 - **Valence partitions differ** (e.g. semicore in valence on one side):
