@@ -1,8 +1,7 @@
 diff --git a/Src/Makefile b/Src/Makefile
-index 2d25c6f..adcd3ed 100644
 --- a/Src/Makefile
 +++ b/Src/Makefile
-@@ -118,7 +118,7 @@ OBJS =  automatic_cell.o atom_options.o \
+@@ -118,7 +118,7 @@
          cart2frac.o obc.o \
          precision.o sys.o m_cell.o files.o \
          spatial.o parallel.o parallelsubs.o  parsing.o chemical.o atom.o atmparams.o \
@@ -11,7 +10,7 @@ index 2d25c6f..adcd3ed 100644
          atmfuncs.o listsc.o memoryinfo.o m_memory.o sorting.o \
          atomlist.o atm_types.o old_atmfuncs.o radial.o \
          alloc.o spher_harm.o periodic_table.o version.o timestamp.o \
-@@ -687,7 +687,7 @@ dftu_specs.o: basis_specs.o basis_types.o interpolation.o m_cite.o parallel.o
+@@ -687,7 +687,7 @@
  dftu_specs.o: precision.o pseudopotential.o radial.o sys.o units.o
  dhscf.o: alloc.o atmfuncs.o delk.o dfscf.o dipole.o doping_uniform.o files.o
  dhscf.o: forhar.o iogrid_netcdf.o m_charge_add.o m_efield.o m_hartree_add.o
@@ -20,7 +19,7 @@ index 2d25c6f..adcd3ed 100644
  dhscf.o: m_partial_charges.o m_rhog.o m_spin.o m_ts_electype.o
  dhscf.o: m_ts_global_vars.o m_ts_hartree.o m_ts_options.o m_ts_voltage.o mesh.o
  dhscf.o: meshdscf.o meshsubs.o moremeshsubs.o parallel.o parsing.o precision.o
-@@ -866,6 +866,7 @@ m_iodm.o: m_io_s.o m_os.o parallel.o
+@@ -866,6 +866,7 @@
  m_iodm_old.o: alloc.o files.o m_matio.o m_mpi_utils.o parallel.o parallelsubs.o
  m_iodm_old.o: precision.o sparse_matrices.o sys.o
  m_iorho.o: alloc.o parallel.o parallelsubs.o precision.o sys.o
@@ -29,19 +28,18 @@ index 2d25c6f..adcd3ed 100644
  m_iostruct.o: siesta_geom.o sys.o units.o
  m_kinetic.o: precision.o
 diff --git a/Src/dhscf.F b/Src/dhscf.F
-index 803a0ca..42e23e5 100644
 --- a/Src/dhscf.F
 +++ b/Src/dhscf.F
-@@ -651,6 +651,8 @@ C     Modules
+@@ -651,6 +651,8 @@
        use siesta_options, only: savebader
        use siesta_options, only: read_deformation_charge_cdf
        use siesta_options, only: mix_charge
-+      use siesta_options, only: rho_restart
++      use siesta_options, only: rho_restart, rho_restart_diff
 +      use m_rho_restart,  only: inject_rho_from_file
  
        use m_efield,       only: add_potential_from_field
        use m_efield,       only: user_specified_field, acting_efield
-@@ -897,6 +899,10 @@ C ----------------------------------------------------------------------
+@@ -897,6 +899,22 @@
           call rhofft(cell, ntml(1), ntml(2), ntml(3), ntm, nspin,
       $                  DRho,rhog_in,BACKWARD)
  
@@ -49,12 +47,22 @@ index 803a0ca..42e23e5 100644
 +         ! Inject density from an external .RHO file (Rho.Restart mode).
 +         ! Replaces the usual DM -> rho (rhoofd) path with a one-shot read.
 +         call inject_rho_from_file(cell, ntm, nsm, ntpl, nspin, DRho)
++         if (rho_restart_diff) then
++            ! Treat the loaded field as a difference density and add
++            ! SIESTA's own atomic-superposition density on top, so the
++            ! total injected rho is consistent with SIESTA's pseudo
++            ! (same pattern as the deformation-charge netCDF path
++            ! below). Diagonal spin components only.
++            do ispin = 1, nsd
++               do ip = 1, ntpl
++                  DRho(ip,ispin) = DRho(ip,ispin) + rhoatm(ip) * rnsd
++               enddo
++            enddo
++         end if
        else if (read_charge_cdf) then
           call read_grid_netcdf(ntm(1:3),nspin,ntpl,DRho,"Rho")
           read_charge_cdf = .false.
 diff --git a/Src/m_rho_restart.F90 b/Src/m_rho_restart.F90
-new file mode 100644
-index 0000000..d0abf78
 --- /dev/null
 +++ b/Src/m_rho_restart.F90
 @@ -0,0 +1,88 @@
@@ -147,10 +155,9 @@ index 0000000..d0abf78
 +
 +end module m_rho_restart
 diff --git a/Src/read_options.F90 b/Src/read_options.F90
-index de0c505..4966c2e 100644
 --- a/Src/read_options.F90
 +++ b/Src/read_options.F90
-@@ -651,6 +651,19 @@ subroutine read_options( na, ns, nspin )
+@@ -651,6 +651,22 @@
            value=usesavedm, dictRef='siesta:usesavedm')
    endif
  
@@ -160,17 +167,20 @@ index de0c505..4966c2e 100644
 +  ! the cube4siesta tool).
 +  rho_restart = fdf_get('Rho.Restart', .false.)
 +  rho_restart_file = fdf_get('Rho.RestartFile', trim(slabel)//'.RHOIN')
++  rho_restart_diff = fdf_get('Rho.Restart.Diff', .false.)
 +  if (ionode) then
 +     write(6,1) 'redata: Rho.Restart (one-step from external rho)', rho_restart
 +     if (rho_restart) then
 +        write(6,'(a,t44,a)') 'redata: Rho restart file ', trim(rho_restart_file)
++        write(6,1) 'redata: Rho.Restart.Diff (add rhoatm after load)', &
++             rho_restart_diff
 +     end if
 +  end if
 +
    ! Neglect Interactions between non-overlapping orbitals ...
    negl = fdf_get('NeglNonOverlapInt',.false.)
    if (ionode) then
-@@ -1488,6 +1501,21 @@ subroutine read_options( na, ns, nspin )
+@@ -1488,6 +1504,21 @@
       end if
    endif
  
@@ -193,16 +203,20 @@ index de0c505..4966c2e 100644
    call deprecated('Optim.Broyden.History.Steps')
    call deprecated('Optim.Broyden.Cycle.On.Maxit')
 diff --git a/Src/siesta_options.F90 b/Src/siesta_options.F90
-index 142b7e0..b5d21bf 100644
 --- a/Src/siesta_options.F90
 +++ b/Src/siesta_options.F90
-@@ -219,6 +219,10 @@ MODULE siesta_options
+@@ -219,6 +219,15 @@
    
    character(len=164) :: sname   ! System name, used to initialise read
  
 +  ! Rho-based restart: load density from .RHOIN, run one SCF step, stop.
 +  logical :: rho_restart             ! Enable rho-restart mode
 +  character(len=512) :: rho_restart_file ! Path to input .RHO file
++  logical :: rho_restart_diff        ! Treat .RHOIN as a difference density
++                                     ! (rho - rho_atomic); SIESTA adds its
++                                     ! own rhoatm back in. Enables
++                                     ! physically meaningful cross-pseudo
++                                     ! restart. Requires rho_restart.
 +
    integer,  parameter :: SOLVE_DIAGON = 0
    integer,  parameter :: SOLVE_ORDERN = 1

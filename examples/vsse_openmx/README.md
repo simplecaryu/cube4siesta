@@ -92,3 +92,41 @@ cube4siesta convert \
 # rho-restart
 mpirun -np 4 siesta < vsse_rr.fdf > vsse_rr.out
 ```
+
+## Update: difference-density mode resolves the mismatch
+
+Instead of the total density, transfer only the bonding-induced
+redistribution Δρ = ρ_scf − ρ_atomic (OpenMX already writes it as
+`*.dden.cube`) and let SIESTA add its own atomic superposition back:
+
+```bash
+# Convert OpenMX's difference density (no rescaling — Δρ integrates to ~0)
+cube4siesta convert \
+    --cube /path/to/VSSe.dden.cube \
+    --output vsse.RHOIN.diff \
+    --from-siesta-rho vsse.RHO \
+    --diff --verify
+
+# vsse_rr_diff.fdf = vsse.fdf + Rho.Restart + Rho.Restart.Diff
+mpirun -np 4 siesta < vsse_rr_diff.fdf > vsse_rr_diff.out
+```
+
+Results vs the converged SIESTA baseline:
+
+| Quantity | Baseline SCF | Total-ρ restart | **Diff-ρ restart** |
+|----------|-------------|-----------------|----------------------|
+| E_KS (eV) | −696.6 | −540.9 | **−693.1** |
+| Fermi (eV) | −4.73 | +30.4 | **−3.37** |
+| DM rel. Frobenius vs baseline | — | 1.49 | **0.103** |
+| mean \|Δband\| occupied (eV) | — | 26.9 | **0.21** |
+
+The 150-eV energy gap closes to ~3 eV, the bands match to 0.21 eV, and
+the one-shot density matrix lands within 10 % of the converged one —
+all with the standard 5-valence `V.psf`, because the V semicore lives
+in ρ_atomic on both sides and cancels out of Δρ.
+
+Caveat: this only helps when there *is* a valence-partition mismatch
+and the source provides a real NC difference density. When the
+partitions already match, plain total-ρ restart is more accurate
+(SiC: see `examples/sic_vasp/diff/`), and PAW atomic densities do not
+transfer (their shape differs from a norm-conserving rhoatm).
