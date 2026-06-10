@@ -6,8 +6,8 @@ different code (VASP 6.5 HSE06 testsuite, zincblende SiC, 2 atoms,
 
 ## Prerequisites
 
-- VASP CHGCAR at some path, e.g.
-  `/home/users2/cha/programs/vasp.6.5.0/testsuite/tests/SiC_HSE06_ALGO=D_RPR/CHGCAR`
+- A VASP CHGCAR for zincblende SiC (this example was made with the
+  `SiC_HSE06_ALGO=D_RPR` case from the VASP 6.5 testsuite).
 - SIESTA 4.1.5 built with the `Rho.Restart` patch (see the
   sibling `siesta-4.1.5/` repo).
 - `pip install -e ..` from the cube4siesta root.

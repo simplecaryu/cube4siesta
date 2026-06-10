@@ -10,12 +10,9 @@ data; tests are skipped silently when the data is absent.
 
 Env vars:
   CUBE4SIESTA_OPENMX_CUBE  -> path to an OpenMX *.tden.cube file
+                              (the assertions expect the 1T-VSSe example)
   CUBE4SIESTA_VASP_CHGCAR  -> path to a VASP CHGCAR file
-
-Defaults for the current machine:
-  OpenMX  -> /home/users2/cha/work/jx_spirit/tutorial/VSSe_1T/VSSe.tden.cube
-  VASP    -> /home/users2/cha/programs/vasp.6.5.0/testsuite/tests/
-             SiC_HSE06_ALGO=D_RPR/CHGCAR
+                              (the assertions expect zincblende SiC)
 """
 
 from __future__ import annotations
@@ -29,15 +26,11 @@ import pytest
 from cube4siesta.cube_io import read_cube
 from cube4siesta.rho_io import read_rho, write_rho
 
-_OPENMX_DEFAULT = "/home/users2/cha/work/jx_spirit/tutorial/VSSe_1T/VSSe.tden.cube"
-_VASP_DEFAULT = (
-    "/home/users2/cha/programs/vasp.6.5.0/testsuite/tests/"
-    "SiC_HSE06_ALGO=D_RPR/CHGCAR"
-)
-
-
-def _path_from_env(var: str, default: str) -> Path | None:
-    p = Path(os.environ.get(var, default))
+def _path_from_env(var: str) -> Path | None:
+    v = os.environ.get(var)
+    if not v:
+        return None
+    p = Path(v)
     return p if p.exists() else None
 
 
@@ -45,7 +38,7 @@ def _path_from_env(var: str, default: str) -> Path | None:
 # OpenMX: VSSe (Janus TMD monolayer, 1T)
 # ---------------------------------------------------------------------------
 
-_OPENMX = _path_from_env("CUBE4SIESTA_OPENMX_CUBE", _OPENMX_DEFAULT)
+_OPENMX = _path_from_env("CUBE4SIESTA_OPENMX_CUBE")
 
 
 @pytest.mark.skipif(_OPENMX is None, reason="OpenMX cube not available")
@@ -88,7 +81,7 @@ def test_openmx_vsse_convert_and_roundtrip(tmp_path):
 # VASP: SiC (FCC 2-atom via HSE testsuite)
 # ---------------------------------------------------------------------------
 
-_VASP = _path_from_env("CUBE4SIESTA_VASP_CHGCAR", _VASP_DEFAULT)
+_VASP = _path_from_env("CUBE4SIESTA_VASP_CHGCAR")
 
 
 @pytest.mark.skipif(_VASP is None, reason="VASP CHGCAR not available")

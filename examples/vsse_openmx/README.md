@@ -5,8 +5,9 @@ atoms, 54x54x343 cube produced by OpenMX 3.9 with PBE + spin polarization).
 
 ## Source data
 
-OpenMX run in `/home/users2/cha/work/jx_spirit/tutorial/VSSe_1T/`,
-total density `VSSe.tden.cube` (13 MB).
+OpenMX 3.9 run of the same structure (PBE, V_PBE19/S_PBE19/Se_PBE19
+pseudopotentials), total density `VSSe.tden.cube` (13 MB) and difference
+density `VSSe.dden.cube` — OpenMX writes both per default.
 
 ## Key observation: the two codes are transferring *different* ρ(r)
 

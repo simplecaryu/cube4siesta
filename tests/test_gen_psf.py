@@ -17,8 +17,8 @@ from cube4siesta.gen_psf import (
 # OpenMX .vps
 # ---------------------------------------------------------------------------
 
-_VPS_DEFAULT = "/home/users2/cha/programs/openmx3.9/DFT_DATA19/VPS/V_PBE19.vps"
-_VPS = Path(os.environ.get("CUBE4SIESTA_VPS", _VPS_DEFAULT))
+# Point CUBE4SIESTA_VPS at an OpenMX V_PBE19.vps to enable these tests.
+_VPS = Path(os.environ.get("CUBE4SIESTA_VPS", "/nonexistent/V_PBE19.vps"))
 
 
 @pytest.mark.skipif(not _VPS.exists(), reason="OpenMX V_PBE19.vps not available")
@@ -60,8 +60,10 @@ def test_vps_to_atom_input(tmp_path):
 # QE .UPF
 # ---------------------------------------------------------------------------
 
-_UPF_SI = Path("/home/users2/cha/programs/wannier90-3.1.0/pseudo/Si.pbe-n-van.UPF")
-_UPF_TE = Path("/home/users2/cha/programs/wannier90-3.1.0/examples/example24/input/Te.pbe-n-nc.UPF")
+# Point these env vars at QE UPF files (e.g. from pslibrary / pseudo-dojo)
+# to enable the UPF tests.
+_UPF_SI = Path(os.environ.get("CUBE4SIESTA_UPF_SI", "/nonexistent/Si.pbe-n-van.UPF"))
+_UPF_TE = Path(os.environ.get("CUBE4SIESTA_UPF_TE", "/nonexistent/Te.pbe-n-nc.UPF"))
 
 
 @pytest.mark.skipif(not _UPF_SI.exists(), reason="QE Si UPF not available")
