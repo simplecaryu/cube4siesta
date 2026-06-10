@@ -158,6 +158,105 @@ def cmd_gen_atom_input(args: argparse.Namespace) -> int:
 _L_LABELS = "spdf"
 
 
+def _parse_labeled(values: list[str] | None) -> dict[str, str]:
+    """Parse repeated LABEL:PATH (or LABEL=SPEC) options into a dict."""
+    out: dict[str, str] = {}
+    for item in values or []:
+        if ":" in item:
+            label, val = item.split(":", 1)
+        elif "=" in item:
+            label, val = item.split("=", 1)
+        else:
+            raise argparse.ArgumentTypeError(f"expected LABEL:VALUE, got {item!r}")
+        out[label] = val
+    return out
+
+
+def cmd_project_dm(args: argparse.Namespace) -> int:
+    from .basis import (build_openmx_orbitals, build_siesta_orbitals,
+                        parse_spec, read_ion_radials, read_pao_radials)
+    from .dm_io import read_dm, write_dm
+    from .orb_indx import read_orb_indx
+    from .project import project_openmx_to_siesta
+    from .scfout_io import read_scfout
+
+    scfout = read_scfout(args.scfout)
+    oi = read_orb_indx(args.orb_indx)
+    template = read_dm(args.template)
+    print(f"[cube4siesta] scfout: {scfout.atomnum} atoms, spin_switch={scfout.spin_switch}, "
+          f"valence_electrons={scfout.valence_electrons:.1f}")
+    print(f"[cube4siesta] template .DM: no_u={template.no_u}, nspin={template.nspin}, "
+          f"nsc={template.nsc}, nnz={template.nnz}")
+
+    ion_map = _parse_labeled(args.ion)
+    pao_map = _parse_labeled(args.pao)
+    spec_map = _parse_labeled(args.spec)
+
+    # species per atom (1-based) from .ORB_INDX, assuming OpenMX atom order matches
+    species_of_atom: dict[int, str] = {}
+    for o in oi.unit:
+        species_of_atom[o.ia] = o.spec
+    n_atoms = len(species_of_atom)
+    if n_atoms != scfout.atomnum:
+        print(f"ERROR: atom count mismatch: ORB_INDX={n_atoms}, scfout={scfout.atomnum}",
+              file=sys.stderr)
+        return 2
+
+    # SIESTA radial tables per species
+    radials_by_species = {lab: read_ion_radials(p) for lab, p in ion_map.items()}
+    missing = {o.spec for o in oi.unit} - set(radials_by_species)
+    if missing:
+        print(f"ERROR: missing --ion for species {missing}", file=sys.stderr)
+        return 2
+    siesta_orbitals = build_siesta_orbitals(oi.unit, radials_by_species)
+
+    # OpenMX orbitals per species, then per atom
+    omx_by_species = {}
+    for lab in {species_of_atom[a] for a in species_of_atom}:
+        if lab not in pao_map or lab not in spec_map:
+            print(f"ERROR: missing --pao/--spec for species {lab}", file=sys.stderr)
+            return 2
+        omx_by_species[lab] = build_openmx_orbitals(
+            parse_spec(spec_map[lab]), read_pao_radials(pao_map[lab])
+        )
+    omx_per_atom = [omx_by_species[species_of_atom[ct]] for ct in range(1, n_atoms + 1)]
+
+    print(f"[cube4siesta] projecting (spacing={args.spacing} Bohr) ...")
+    res = project_openmx_to_siesta(
+        scfout, oi, template, siesta_orbitals, omx_per_atom,
+        spacing=args.spacing, verbose=args.verbose,
+        purify=args.purify, qtot=args.qtot,
+    )
+    write_dm(args.output, res.dm)
+    print(f"[cube4siesta] wrote {args.output}")
+    print(f"    Tr(P_SIE S) = {res.n_electrons:.4f} electrons "
+          f"(SIESTA-representable; semicore projects out)")
+    if res.purified:
+        print(f"    purified: natural occupations were in "
+              f"[{res.occ_min:.4f}, {res.occ_max:.4f}] -> idempotent filling, "
+              f"{res.n_frac} fractional state(s) at the Fermi boundary")
+    print(f"    Hermiticity residual = {res.max_asym:.2e}  (k-points: {res.nk})")
+    return 0
+
+
+def cmd_compare_dm(args: argparse.Namespace) -> int:
+    from .dm_compare import compare, format_table
+    from .dm_io import read_dm
+    from .orb_indx import read_orb_indx
+
+    oi = read_orb_indx(args.orb_indx)
+    ref = read_dm(args.ref)
+    cand_map = _parse_labeled(args.cand)
+    results = {}
+    for name, path in cand_map.items():
+        results[name] = compare(ref, read_dm(path), oi, sig_thresh=args.sig_thresh)
+    print(f"[cube4siesta] reference: {args.ref}  (no_u={ref.no_u}, nnz={ref.nnz})")
+    print(f"[cube4siesta] DM-value similarity vs reference "
+          f"(sig threshold |ref|>{args.sig_thresh}):\n")
+    print(format_table(results))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cube4siesta")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -196,6 +295,43 @@ def main(argv: list[str] | None = None) -> int:
     src.add_argument("--from-upf", help="Quantum ESPRESSO .UPF file")
     g.add_argument("--output", required=True, help="output ATOM .inp path")
     g.set_defaults(func=cmd_gen_atom_input)
+
+    # --- project-dm subcommand ---
+    p = sub.add_parser(
+        "project-dm",
+        help="Project an OpenMX density matrix onto SIESTA's NAO basis (.scfout -> .DM)",
+    )
+    p.add_argument("--scfout", required=True, help="OpenMX .scfout file")
+    p.add_argument("--orb-indx", required=True, help="SIESTA .ORB_INDX file")
+    p.add_argument("--template", required=True,
+                   help="SIESTA .DM whose sparsity pattern is reused for output")
+    p.add_argument("--ion", action="append", metavar="LABEL:PATH",
+                   help="SIESTA .ion file for a species (repeatable), e.g. Si:Si.ion")
+    p.add_argument("--pao", action="append", metavar="LABEL:PATH",
+                   help="OpenMX .pao file for a species (repeatable), e.g. Si:Si7.0.pao")
+    p.add_argument("--spec", action="append", metavar="LABEL:SPEC",
+                   help="OpenMX basis spec for a species (repeatable), e.g. Si:s2p2d1")
+    p.add_argument("--spacing", type=float, default=0.15,
+                   help="real-space grid spacing in Bohr for overlap quadrature")
+    p.add_argument("--purify", action="store_true",
+                   help="canonical (McWeeny-limit) purification: make the DM "
+                   "idempotent and fix Tr(PS) to --qtot")
+    p.add_argument("--qtot", type=float,
+                   help="target electron count for --purify (default: raw "
+                   "Tr(PS) rounded to the nearest integer)")
+    p.add_argument("--output", required=True, help="output SIESTA .DM path")
+    p.add_argument("--verbose", action="store_true")
+    p.set_defaults(func=cmd_project_dm)
+
+    # --- compare-dm subcommand ---
+    cm = sub.add_parser("compare-dm", help="Compare SIESTA .DM files element-wise")
+    cm.add_argument("--orb-indx", required=True, help="SIESTA .ORB_INDX file")
+    cm.add_argument("--ref", required=True, help="reference .DM (e.g. SIESTA baseline)")
+    cm.add_argument("--cand", action="append", required=True, metavar="NAME:PATH",
+                    help="candidate .DM (repeatable), e.g. projection:si_omx_proj.DM")
+    cm.add_argument("--sig-thresh", type=float, default=0.02,
+                    help="|ref| threshold for the 'significant element' correlation")
+    cm.set_defaults(func=cmd_compare_dm)
 
     args = parser.parse_args(argv)
     return args.func(args)
