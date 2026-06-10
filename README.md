@@ -12,16 +12,39 @@ scratch, this tool is for you.
 
 ## What does it do?
 
-1. **Reads** the charge density from your other code (Gaussian cube
-   format, or VASP CHGCAR).
-2. **Converts** it onto SIESTA's internal grid format (`.RHO`).
-3. A small **SIESTA patch** (`Rho.Restart`) tells SIESTA to use that
-   density as a starting point instead of guessing from atomic
-   orbitals.
-
-The result is a standard SIESTA `.DM` file that you can use for any
+It turns the result of your other DFT calculation into a standard
+SIESTA `.DM` (density matrix) file, which you can then use for any
 further SIESTA calculation — band structures, geometry optimization,
-transport, etc.
+transport, etc. There are two ways to get there:
+
+- **Density route** (`convert` + a small SIESTA patch): convert the
+  charge density to SIESTA's grid format (`.RHO`), then a patched
+  SIESTA reads it and produces the `.DM` in a single step.
+- **Density-matrix route** (`project-dm`, OpenMX only): read the
+  density matrix OpenMX already stores and project it directly onto
+  SIESTA's basis. Pure post-processing — **no SIESTA patch needed**.
+
+---
+
+## Which route should I use?
+
+The key question is whether your source code's pseudopotential counts
+the **same valence electrons** as your SIESTA `.psf` (e.g. OpenMX's
+default vanadium has 13 valence electrons, a typical SIESTA `V.psf`
+has 5 — that is a *mismatch*). If you're not sure, run
+`cube4siesta convert` on the source cube and check whether the printed
+electron count matches what SIESTA expects for your structure.
+
+| Your situation | Use this | Patch needed? | Accuracy (measured) |
+|---|---|---|---|
+| Valence counts **match** | total-density restart (Quickstart below) | yes | best (DM within ~2 %) |
+| Valence counts **differ**, source is OpenMX / QE-with-NC-pseudos | difference-density restart (`--diff`) | yes | best under mismatch (DM ~10 %) |
+| Valence counts **differ**, source is OpenMX, you can't patch SIESTA | DM projection (`project-dm --purify`) | **no** | close second (DM ~16 %, bands match the Δρ route) |
+| Valence counts **differ**, source is VASP (PAW) | regenerate the SIESTA pseudo (`gen-atom-input`) | yes | no density route works from PAW under mismatch |
+
+(The accuracy numbers are relative Frobenius errors of the resulting
+density matrix vs a fully converged SIESTA reference; details and band
+structures in `examples/DM_PROJECTION_RESULTS.md`.)
 
 ---
 
@@ -225,6 +248,78 @@ in `testdata/pseudos/`, downloaded from the Cornell NNIN Virtual Vault.
 
 ---
 
+## The no-patch route: direct density-matrix projection (OpenMX)
+
+If your source code is OpenMX, you can skip the density transfer (and
+the SIESTA patch) entirely: OpenMX already stores its density matrix in
+the `.scfout` file, and `cube4siesta project-dm` projects it directly
+onto SIESTA's basis, writing a SIESTA `.DM`. This also handles valence
+mismatches automatically — any density SIESTA's basis cannot represent
+(e.g. semicore electrons) simply drops out of the projection.
+
+### 1. Collect three things from your OpenMX calculation
+
+- **`SYSTEM.scfout`** — add `HS.fileout  on` to your OpenMX input and
+  run (or re-run with `scf.restart on`; it finishes in one step).
+- **The `.pao` files** for each element — these are in your OpenMX
+  installation under `DFT_DATA19/PAO/` (e.g. `Si7.0.pao`). Use the same
+  ones your OpenMX input named.
+- **The basis spec** for each element — read it off the
+  `Definition.of.Atomic.Species` block of your OpenMX input: for
+  `Si7.0-s2p2d1` the spec is `s2p2d1`.
+
+### 2. Run SIESTA once, cheaply, to get the basis files
+
+The projection needs to know SIESTA's orbitals and sparsity pattern.
+Any SIESTA run of the same structure and basis produces them — **it
+does not need to be converged**, so you can use
+`MaxSCFIterations 1` + `SCFMustConverge false`:
+
+```bash
+mpirun -np 4 siesta < my_system.fdf > template.out
+# this leaves behind: my_system.DM, my_system.ORB_INDX, <Element>.ion
+```
+
+### 3. Project
+
+```bash
+cube4siesta project-dm \
+    --scfout   SYSTEM.scfout \
+    --orb-indx my_system.ORB_INDX \
+    --template my_system.DM \
+    --ion  Si:Si.ion \
+    --pao  Si:/path/to/openmx/DFT_DATA19/PAO/Si7.0.pao \
+    --spec Si:s2p2d1 \
+    --purify \
+    --output my_system_projected.DM
+```
+
+(Repeat `--ion/--pao/--spec` once per element.) The tool prints the
+electron count `Tr(P·S)` — check it is close to what SIESTA expects.
+`--purify` cleans the projected matrix up to an idempotent density
+matrix with exactly the right electron count (add `--qtot N` to set N
+explicitly); use it when you plan to run SIESTA from the result. Skip
+it if you want the mathematically closest representation of the OpenMX
+density matrix itself.
+
+### 4. Use it
+
+```bash
+cp my_system_projected.DM my_system.DM
+# in your fdf:  DM.UseSaveDM  true
+mpirun -np 4 siesta < my_system.fdf > restart.out
+```
+
+This works with a completely standard SIESTA — `DM.UseSaveDM` is a
+stock feature. To check the quality of any `.DM` against a reference:
+
+```bash
+cube4siesta compare-dm --orb-indx my_system.ORB_INDX \
+    --ref converged.DM --cand projected:my_system_projected.DM
+```
+
+---
+
 ## SIESTA fdf flags
 
 | Flag | Default | What it does |
@@ -292,6 +387,34 @@ Supported formats:
 - Quantum ESPRESSO `.UPF` files (v1 and v2, fully automatic)
 - VASP `POTCAR` — not supported; see [issue #3](https://github.com/simplecaryu/cube4siesta/issues/3)
 
+### `cube4siesta project-dm`
+
+Projects an OpenMX density matrix (`.scfout`) onto SIESTA's basis and
+writes a SIESTA `.DM`. No SIESTA patch required. See the walkthrough
+section above for where each input comes from.
+
+```
+cube4siesta project-dm --scfout FILE.scfout --orb-indx FILE.ORB_INDX \
+    --template FILE.DM --ion EL:FILE.ion --pao EL:FILE.pao \
+    --spec EL:s2p2d1 [--purify [--qtot N]] --output OUT.DM
+
+  --ion/--pao/--spec   repeat once per element (EL:value)
+  --purify             make the result idempotent with exactly --qtot
+                       electrons (default: nearest integer)
+  --spacing            quadrature grid spacing in Bohr (default 0.15)
+```
+
+### `cube4siesta compare-dm`
+
+Element-wise comparison of SIESTA `.DM` files (relative Frobenius
+error, correlations, largest deviation) — useful to judge any
+transferred DM against a converged reference.
+
+```
+cube4siesta compare-dm --orb-indx FILE.ORB_INDX --ref REF.DM \
+    --cand NAME:CAND.DM [--cand NAME2:CAND2.DM ...]
+```
+
 ### Python API
 
 If you prefer to script things in Python:
@@ -302,6 +425,9 @@ from cube4siesta.cube_io import read_cube, write_cube  # Gaussian cubes
 from cube4siesta.resample import resample_to_mesh   # 3D interpolation
 from cube4siesta.vasp_io import chgcar_to_cube      # VASP CHGCAR → cube
 from cube4siesta.gen_psf import parse_openmx_vps, parse_qe_upf, write_atom_input
+from cube4siesta.dm_io import read_dm, write_dm     # SIESTA .DM files
+from cube4siesta.scfout_io import read_scfout       # OpenMX .scfout
+from cube4siesta.project import project_openmx_to_siesta, purify_canonical
 ```
 
 ---
@@ -318,6 +444,12 @@ The `examples/` directory contains fully worked demonstrations:
   a Janus VSSe monolayer. Also demonstrates what goes wrong when the
   pseudopotentials don't match (and how to fix it).
 
+- **`examples/DM_PROJECTION_RESULTS.md`** — the full measured
+  comparison of all transfer routes (density matrices and band
+  structures, for matched and mismatched pseudopotentials), with
+  `examples/dm_projection_compare.sh` to reproduce it (set the
+  `OPENMX_PAO` environment variable to your OpenMX `DFT_DATA19/PAO`).
+
 ---
 
 ## Project status
@@ -329,15 +461,18 @@ Done:
 - [x] VASP CHGCAR → cube converter
 - [x] SIESTA `Rho.Restart` patch
 - [x] Pseudopotential matching tool (`gen-atom-input`)
-- [x] End-to-end tested on H₂O, SiC (VASP), VSSe (OpenMX)
-
-In progress:
-- [ ] Cross-pseudo difference-density mode ([PR #2](https://github.com/simplecaryu/cube4siesta/pull/2), [issue #1](https://github.com/simplecaryu/cube4siesta/issues/1))
-- [ ] VASP POTCAR auto-conversion ([issue #3](https://github.com/simplecaryu/cube4siesta/issues/3))
+- [x] Cross-pseudo difference-density mode (`--diff`, `Rho.Restart.Diff`;
+      [issue #1](https://github.com/simplecaryu/cube4siesta/issues/1))
+- [x] Direct OpenMX→SIESTA density-matrix projection (`project-dm`)
+      with canonical purification, and `compare-dm`
+- [x] End-to-end tested on H₂O, Si, SiC (VASP), VSSe (OpenMX, QE)
 
 Future:
+- [ ] VASP POTCAR auto-conversion ([issue #3](https://github.com/simplecaryu/cube4siesta/issues/3))
 - [ ] Spin-polarized (nspin=2) support
 - [ ] Non-collinear spin (nspin=4)
+- [ ] `project-dm` for sources other than OpenMX (needs the source DM
+      + basis tables; QE/VASP do not expose these as directly)
 
 ---
 
