@@ -126,7 +126,10 @@ all with the standard 5-valence `V.psf`, because the V semicore lives
 in ρ_atomic on both sides and cancels out of Δρ.
 
 Caveat: this only helps when there *is* a valence-partition mismatch
-and the source provides a real NC difference density. When the
-partitions already match, plain total-ρ restart is more accurate
-(SiC: see `examples/sic_vasp/diff/`), and PAW atomic densities do not
-transfer (their shape differs from a norm-conserving rhoatm).
+and the source provides a real norm-conserving difference density.
+When the partitions already match, plain total-ρ restart is more
+accurate (SiC: see `examples/sic_vasp/diff/`). And the diff route does
+not work from PAW sources (DM-verified: VSSe-PAW Δρ gives relFrob 1.41,
+no better than total-ρ's 1.49, where the NC source reaches 0.103) —
+for a PAW source with mismatched valence, regenerate the SIESTA
+pseudopotential instead.

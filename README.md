@@ -212,8 +212,11 @@ diff-density restart lands within 3.5 eV, reproduces the occupied bands
 to 0.21 eV, and the resulting density matrix is within 10 % of the
 converged one. **Only use this when the partitions actually differ** —
 with matching pseudopotentials the plain total-ρ restart is more
-accurate, and PAW atomic densities do not transfer (see
-`docs/issues/001-cross-pseudo-diff-density.md` for the full analysis).
+accurate. Note this is a norm-conserving-source technique: from PAW
+sources (VASP) the diff route gives no improvement, so for a PAW
+source with mismatched valence regenerate the pseudopotential instead
+(see `docs/issues/001-cross-pseudo-diff-density.md` for the measured
+numbers).
 
 ### Pre-packaged pseudopotentials
 

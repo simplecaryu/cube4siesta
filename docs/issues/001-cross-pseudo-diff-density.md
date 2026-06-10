@@ -82,10 +82,15 @@ When to use which (measured, not guessed):
   −284 vs −264 eV, see `examples/sic_vasp/diff/`) because the
   source-vs-SIESTA atomic-shape difference is pure noise when there is
   no mismatch to fix.
-- **PAW sources**: only the total-ρ route is meaningful; PAW
-  atomic-superposition densities differ in shape from a
-  norm-conserving rhoatm (the VASP V_sv atomic CHGCAR does not even
-  integrate to the valence count on the plane-wave grid).
+- **PAW sources**: the diff route does not work from PAW — DM-verified:
+  VSSe-PAW Δρ relFrob 1.41 vs total-ρ 1.49 (no improvement; the NC
+  source reaches 0.103), SiC-PAW Δρ 0.73 vs total-ρ 0.15 (5× worse).
+  The PAW atomic-superposition CHGCAR differs in shape from a
+  norm-conserving rhoatm (for V_sv it does not even integrate to the
+  valence count on the plane-wave grid). Total-ρ from PAW is fine when
+  the partitions match (SiC 0.15); when they don't, **no density route
+  works from a PAW source** — regenerate the SIESTA pseudopotential
+  instead (`gen-atom-input`).
 
 ## Out of scope
 
