@@ -85,12 +85,19 @@ When to use which (measured, not guessed):
 - **PAW sources**: the diff route does not work from PAW — DM-verified:
   VSSe-PAW Δρ relFrob 1.41 vs total-ρ 1.49 (no improvement; the NC
   source reaches 0.103), SiC-PAW Δρ 0.73 vs total-ρ 0.15 (5× worse).
-  The PAW atomic-superposition CHGCAR differs in shape from a
-  norm-conserving rhoatm (for V_sv it does not even integrate to the
-  valence count on the plane-wave grid). Total-ρ from PAW is fine when
-  the partitions match (SiC 0.15); when they don't, **no density route
-  works from a PAW source** — regenerate the SIESTA pseudopotential
-  instead (`gen-atom-input`).
+  The failure is in *constructing* Δρ from two CHGCARs, not in the
+  injection: the CHGCAR(SCF) − CHGCAR(ICHARG=1) field is not a small
+  bonding redistribution. Measured on the injected fields: VSSe-PAW
+  Δρ carries ∫|Δρ| = 8.3 e with a +0.50 e net charge (the OpenMX NC
+  `.dden.cube` has 0.91 e and is neutral to 1e-3); SiC-PAW Δρ is
+  neutral but still carries ∫|Δρ| = 2.9 e with ±1.1 e/Bohr³ near-core
+  spikes (NC: 1.3 e, ±0.07). The PAW atomic-superposition CHGCAR
+  simply does not reproduce the near-core/augmentation content of the
+  SCF CHGCAR, so the subtraction leaves O(several e) of junk exactly
+  where the semicore cancellation was supposed to happen. Total-ρ from
+  PAW is fine when the partitions match (SiC 0.15); when they don't,
+  **no density route works from a PAW source** — regenerate the SIESTA
+  pseudopotential instead (`gen-atom-input`).
 
 ## Out of scope
 
