@@ -185,6 +185,39 @@ In practice, for common elements like Si, C, O, the standard Cornell
 NNIN `.psf` files work well with VASP densities. You can download them
 from the [Cornell NNIN Virtual Vault](https://nninc.cnf.cornell.edu/).
 
+### Alternative: transfer the difference density instead
+
+If regenerating the pseudopotential is not an option, there is a second
+route that keeps your standard SIESTA `.psf`: transfer only the
+**difference density** Δρ = ρ_scf − ρ_atomic and let SIESTA add its own
+atomic-superposition density back (`Rho.Restart.Diff`). The
+pseudo-dependent part of ρ lives almost entirely in ρ_atomic, so Δρ
+transfers across different core/valence partitions where the total
+density cannot.
+
+```bash
+# OpenMX writes the difference density natively (*.dden.cube):
+cube4siesta convert --cube SYSTEM.dden.cube --output system.RHOIN.diff \
+    --from-siesta-rho system.RHO --diff --verify
+
+# VASP: build it from two CHGCARs (SCF run, and ICHARG=1 NELM=0 run):
+cube4siesta-vasp-diff --scf CHGCAR --atomic CHGCAR.atomic --out dden.cube
+
+# then add to your fdf:  Rho.Restart.Diff true
+```
+
+Measured on VSSe (OpenMX V has 13 valence electrons, SIESTA's V.psf
+has 5): total-ρ restart misses the baseline by 156 eV, while the
+diff-density restart lands within 3.5 eV, reproduces the occupied bands
+to 0.21 eV, and the resulting density matrix is within 10 % of the
+converged one. **Only use this when the partitions actually differ** —
+with matching pseudopotentials the plain total-ρ restart is more
+accurate. Note this is a norm-conserving-source technique: from PAW
+sources (VASP) the diff route gives no improvement, so for a PAW
+source with mismatched valence regenerate the pseudopotential instead
+(see `docs/issues/001-cross-pseudo-diff-density.md` for the measured
+numbers).
+
 ### Pre-packaged pseudopotentials
 
 We include tested GGA-PBE `.psf` files for C, Si, V, S, Se, Mn, and Te
@@ -198,6 +231,7 @@ in `testdata/pseudos/`, downloaded from the Cornell NNIN Virtual Vault.
 |------|---------|--------------|
 | `Rho.Restart` | `false` | Tells SIESTA to read an external density and do one diagonalization step to produce a DM. |
 | `Rho.RestartFile` | `<SystemLabel>.RHOIN` | Path to the density file that cube4siesta wrote. |
+| `Rho.Restart.Diff` | `false` | Treat the file as a difference density (ρ − ρ_atomic) and add SIESTA's own atomic density on top. Requires `Rho.Restart`. |
 
 When `Rho.Restart` is on, SIESTA automatically sets
 `MaxSCFIterations=1` and turns off convergence checks — this is
@@ -220,7 +254,27 @@ Options:
   --target-mesh Nx,Ny,Nz   Specify the target grid manually
   --order 1|3              Interpolation quality: 1 = fast (default), 3 = smooth
   --rescale-to N           Adjust the total electron count to N
+  --diff                   Input is a difference density (e.g. OpenMX
+                           *.dden.cube); keep it charge-neutral, for
+                           use with Rho.Restart.Diff
+  --subtract REF           Build a difference density: subtract a
+                           reference cube/.RHO (the source code's
+                           atomic-superposition density) before writing
   --verify                 Double-check the output by reading it back
+```
+
+### `cube4siesta-vasp-diff`
+
+Builds a difference-density cube from two VASP CHGCARs, for
+`Rho.Restart.Diff` mode (requires `pymatgen`).
+
+```
+cube4siesta-vasp-diff --scf CHGCAR --atomic CHGCAR.atomic --out dden.cube
+
+  --scf      CHGCAR from the converged SCF run
+  --atomic   CHGCAR from an ICHARG=1 NELM=0 run (atomic superposition,
+             same structure and POTCARs)
+  --out      output cube (integral ≈ 0)
 ```
 
 ### `cube4siesta gen-atom-input`

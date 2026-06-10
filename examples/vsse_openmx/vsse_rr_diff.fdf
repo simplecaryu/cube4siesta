@@ -1,0 +1,48 @@
+SystemLabel            vsse_rrd
+SystemName             VSSe 1T monolayer (Janus, from OpenMX)
+
+NumberOfAtoms          3
+NumberOfSpecies        3
+%block ChemicalSpeciesLabel
+  1  23  V
+  2  16  S
+  3  34  Se
+%endblock ChemicalSpeciesLabel
+
+LatticeConstant        1.0 Ang
+%block LatticeVectors
+  1.6360860  -2.8337841  0.0000000
+  1.6360860   2.8337841  0.0000000
+  0.0000000   0.0000000 18.0225065
+%endblock LatticeVectors
+
+AtomicCoordinatesFormat   Fractional
+%block AtomicCoordinatesAndAtomicSpecies
+ 0.3333333  0.6666667  0.0000194   1  V
+ 0.6666667  0.3333333  0.0774001   2  S
+ 0.0000000  0.0000000  0.9089082   3  Se
+%endblock AtomicCoordinatesAndAtomicSpecies
+
+PAO.BasisSize          SZ
+MeshCutoff             150. Ry
+xc.functional          GGA
+xc.authors             PBE
+
+%block kgrid_Monkhorst_Pack
+  6 0 0  0.0
+  0 6 0  0.0
+  0 0 1  0.0
+%endblock kgrid_Monkhorst_Pack
+
+MaxSCFIterations       300
+DM.MixingWeight        0.03
+DM.Tolerance           1.d-3
+DM.NumberPulay         6
+ElectronicTemperature  300 K
+SCFMustConverge        false
+SaveRho                true
+WriteEigenvalues       true
+
+Rho.Restart         true
+Rho.RestartFile     vsse.RHOIN.diff
+Rho.Restart.Diff    true
