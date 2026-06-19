@@ -181,13 +181,18 @@ def _spline_from(r: np.ndarray, R: np.ndarray) -> CubicSpline:
 # --------------------------------------------------------------------------
 # SIESTA .ion radial tables
 # --------------------------------------------------------------------------
-def read_ion_radials(path: str | Path) -> dict[tuple[int, int], tuple[np.ndarray, np.ndarray, float]]:
+def read_ion_radials(path: str | Path) -> dict[tuple[int, ...], tuple[np.ndarray, np.ndarray, float]]:
     """
     Parse the ``# PAOs`` section of a SIESTA .ion file.
 
-    Returns {(l, zeta): (r, R, rcut)}. zeta is 1-based, matching .ORB_INDX 'z'.
+    Returns radial tables keyed primarily by ``(n, l, zeta)``. For ordinary
+    bases where ``(l, zeta)`` is unique, a backward-compatible ``(l, zeta)``
+    alias is also stored. The principal quantum number is needed for semicore
+    PAO blocks such as Mo 4s and 5s, which can share the same ``l`` and ``z``.
     """
-    radials: dict[tuple[int, int], tuple[np.ndarray, np.ndarray, float]] = {}
+    radials: dict[tuple[int, ...], tuple[np.ndarray, np.ndarray, float]] = {}
+    seen_lz: set[tuple[int, int]] = set()
+    duplicate_lz: set[tuple[int, int]] = set()
     with open(path) as fh:
         lines = fh.readlines()
     i = 0
@@ -206,7 +211,7 @@ def read_ion_radials(path: str | Path) -> dict[tuple[int, int], tuple[np.ndarray
         head = line.split()
         # orbital header: "l n z is_pol pop"
         if len(head) >= 5 and all(_is_int(head[k]) for k in range(4)):
-            l = int(head[0]); z = int(head[2])
+            l = int(head[0]); n = int(head[1]); z = int(head[2])
             i += 1
             npts, _delta, rc = (lambda t: (int(t[0]), float(t[1]), float(t[2])))(
                 lines[i].split()
@@ -217,11 +222,48 @@ def read_ion_radials(path: str | Path) -> dict[tuple[int, int], tuple[np.ndarray
                 a, b = lines[i].split()[:2]
                 rr[k] = float(a); RR[k] = float(b)
                 i += 1
-            radials[(l, z)] = (rr, RR, rc)
+            value = (rr, RR, rc)
+            radials[(n, l, z)] = value
+            lz = (l, z)
+            if lz in seen_lz:
+                duplicate_lz.add(lz)
+                radials.pop(lz, None)
+            elif lz not in duplicate_lz:
+                radials[lz] = value
+            seen_lz.add(lz)
         else:
             # reached the end of the PAO section (e.g. "# KBs")
             break
     return radials
+
+
+def read_ion_populations(path: str | Path) -> dict[tuple[int, int, int], float]:
+    """
+    Return the neutral-atom shell populations from a SIESTA .ion ``# PAOs``
+    section, keyed by ``(n, l, zeta)``.
+
+    The population printed on each PAO header line is the occupancy of the whole
+    ``(n, l, z)`` shell. Dividing by ``2l + 1`` gives the per-``m`` occupancy used
+    to seed a diagonal neutral-atom density matrix.
+    """
+    pops: dict[tuple[int, int, int], float] = {}
+    with open(path) as fh:
+        lines = fh.readlines()
+    i = 0
+    while i < len(lines) and not lines[i].lstrip().startswith("# PAOs"):
+        i += 1
+    for line in lines[i + 1:]:
+        t = line.split()
+        if len(t) >= 5 and all(_is_int(t[k]) for k in range(4)):
+            l, n, z = int(t[0]), int(t[1]), int(t[2])
+            try:
+                pops[(n, l, z)] = float(t[4])
+            except ValueError:
+                pass
+        elif t and t[0].startswith("#"):
+            # reached the end of the PAO section (e.g. "# KBs")
+            break
+    return pops
 
 
 def build_siesta_orbitals(unit_orbitals, radials_by_species) -> list[Orbital]:
@@ -233,7 +275,13 @@ def build_siesta_orbitals(unit_orbitals, radials_by_species) -> list[Orbital]:
     """
     out: list[Orbital] = []
     for o in unit_orbitals:
-        rr, RR, rc = radials_by_species[o.spec][(o.l, o.z)]
+        table = radials_by_species[o.spec]
+        key_nlz = (o.n, o.l, o.z)
+        key_lz = (o.l, o.z)
+        if key_nlz in table:
+            rr, RR, rc = table[key_nlz]
+        else:
+            rr, RR, rc = table[key_lz]
         # SIESTA .ion stores f(r) with orbital = f(r) * r^l * Y_lm (see
         # atmfuncs.f: phi = phir * r**l * rly). Bake r^l into the radial so
         # R(r) is the full radial part, matching OpenMX's convention.

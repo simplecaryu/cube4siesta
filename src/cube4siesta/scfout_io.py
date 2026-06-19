@@ -65,6 +65,7 @@ class Scfout:
     chemp: float
     valence_electrons: float
     total_spin: float
+    input_text: str = ""          # best-effort extraction of the embedded OpenMX input
 
     @property
     def nspin(self) -> int:
@@ -216,6 +217,11 @@ def read_scfout(path: str | Path) -> Scfout:
         chemp = float(d_vec[0])
         valence_electrons = float(d_vec[8])
         total_spin = float(d_vec[9])
+
+        # OpenMX appends the input file after the numeric payload. It is not
+        # needed for the low-level parser, but the auto CLI can use it to infer
+        # DATA.PATH, species PAO tags, and atom labels.
+        input_text = _extract_ascii_tail(r.fp.read())
     finally:
         r.close()
 
@@ -238,7 +244,16 @@ def read_scfout(path: str | Path) -> Scfout:
         chemp=chemp,
         valence_electrons=valence_electrons,
         total_spin=total_spin,
+        input_text=input_text,
     )
+
+
+def _extract_ascii_tail(data: bytes) -> str:
+    """Return printable strings from the trailing OpenMX input section."""
+    import re
+
+    chunks = re.findall(rb"[\x09\x20-\x7e]{4,}", data)
+    return "\n".join(c.decode("latin1", errors="ignore") for c in chunks)
 
 
 def trace_PS(sc: Scfout, spin: int = 0) -> float:

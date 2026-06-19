@@ -257,9 +257,51 @@ def cmd_compare_dm(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dm_seed(args: argparse.Namespace) -> int:
+    from .density_fit import make_filtered_dm_seed, restart_fdf_block
+    from .dm_io import write_dm
+
+    res = make_filtered_dm_seed(
+        base_dir=args.baseline,
+        stem=args.stem,
+        dden_path=args.dden,
+        damp=args.damp,
+        verbose=args.verbose,
+    )
+    write_dm(args.output, res.dm)
+    print(f"[cube4siesta] wrote filtered DM seed -> {args.output}")
+    print(f"    nnz={res.nnz}  max|D|={res.max_abs:.3f}  "
+          f"filtered Delta-rho integral={res.filtered_integral:+.4f} e")
+    print(f"    seed vs converged DM (pre-SCF, diagnostic only): "
+          f"L2={res.direct_l2:.4f}")
+    print("    -> one SIESTA diagonalisation refines this seed. Add to your fdf:\n")
+    print(restart_fdf_block())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cube4siesta")
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    # --- dm-seed subcommand (primary cross-code restart route) ---
+    ds = sub.add_parser(
+        "dm-seed",
+        help="MAIN ROUTE: build a SIESTA DM restart seed by filtering a "
+        "cross-code difference density onto the SIESTA basis (semicore-safe)",
+    )
+    ds.add_argument("--baseline", required=True,
+                    help="directory holding the SIESTA baseline run "
+                    "(<stem>.DM/.ORB_INDX/.STRUCT_OUT/.RHO and <species>.ion)")
+    ds.add_argument("--stem", required=True,
+                    help="SIESTA SystemLabel of the baseline run (e.g. vsse)")
+    ds.add_argument("--dden", required=True,
+                    help="cross-code difference density rho_scf - rho_atoms "
+                    "(.cube, e.g. OpenMX *.dden.cube, or a .RHO)")
+    ds.add_argument("--output", required=True, help="output seed .DM path")
+    ds.add_argument("--damp", type=float, default=0.1,
+                    help="least-squares damping for the basis filter (default 0.1)")
+    ds.add_argument("--verbose", action="store_true")
+    ds.set_defaults(func=cmd_dm_seed)
 
     c = sub.add_parser("convert", help="Convert a Gaussian cube to SIESTA .RHO")
     c.add_argument("--cube", required=True, help="input Gaussian cube file")

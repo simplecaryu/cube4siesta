@@ -15,6 +15,7 @@ dependencies = [
 [project.scripts]
 cube4siesta = "cube4siesta.cli:main"
 cube4siesta-vasp-diff = "cube4siesta.vasp_diff:main_vasp_diff"
+openmx2siesta-dm = "cube4siesta.auto_project:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

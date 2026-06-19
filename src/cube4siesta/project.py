@@ -90,19 +90,20 @@ def purify_canonical(
     deg_tol: float = 1e-6,
 ) -> tuple[float, float, int]:
     """
-    Canonical (McWeeny-limit) purification of a k-resolved density matrix,
+    Spectral purification / occupation refill of a k-resolved density matrix,
     in place.
 
     Each P(k) is diagonalised in the S(k) metric to get natural occupations
-    f_i(k) and S-orthonormal natural orbitals. The occupations are then refilled
-    aufbau-style with a single global Fermi level across all k-points: the
-    highest-occupation states are set to ``occ_cap`` until the average
-    occupation per cell equals ``n_channel``. States degenerate with the Fermi
-    boundary (within ``deg_tol``) share the remaining charge equally, so metals
-    and odd electron counts are handled without breaking k-point symmetry.
+    f_i(k) and S-orthonormal natural orbitals. The natural orbitals are kept
+    fixed, while the occupations are refilled aufbau-style with a single global
+    Fermi level across all k-points: the highest-occupation states are set to
+    ``occ_cap`` until the average occupation per cell equals ``n_channel``.
+    States degenerate with the Fermi boundary (within ``deg_tol``) share the
+    remaining charge equally, so metals and odd electron counts are handled
+    without breaking k-point symmetry.
 
-    This yields directly the fixed point that iterative McWeeny purification
-    (P' = 3PSP - 2PSPSP) converges to, with the trace constraint built in.
+    This is not an untargeted iterative McWeeny procedure. The target trace is
+    explicit and determines the rank/filling of the final idempotent projector.
     Note: for spin-polarised sources the projection carries the spin-summed DM,
     so purification acts on total occupations capped at 2.
 
