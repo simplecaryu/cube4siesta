@@ -15,18 +15,61 @@ scratch, this tool is for you.
 It turns the result of your other DFT calculation into a standard
 SIESTA `.DM` (density matrix) file, which you can then use for any
 further SIESTA calculation — band structures, geometry optimization,
-transport, etc. There are two ways to get there:
+transport, etc.
 
-- **Density route** (`convert` + a small SIESTA patch): convert the
-  charge density to SIESTA's grid format (`.RHO`), then a patched
-  SIESTA reads it and produces the `.DM` in a single step.
-- **Density-matrix route** (`project-dm`, OpenMX only): read the
-  density matrix OpenMX already stores and project it directly onto
-  SIESTA's basis. Pure post-processing — **no SIESTA patch needed**.
+### The main route: filtered DM restart (`dm-seed`)
+
+The recommended, general-purpose route is **`dm-seed`**. You give it a
+*difference density* `Δρ = ρ_scf − ρ_atoms` (which essentially any DFT
+code can write) and it fits that density onto SIESTA's own basis,
+producing a seed `.DM`. SIESTA then refines the seed in a **single
+diagonalization** — no SIESTA source patch, and no density matrix from
+the source code.
+
+Why this is the default:
+
+- **Semicore-safe / mismatch-capable.** Pseudopotentials that disagree
+  on how many electrons are valence (e.g. OpenMX treats V 3s/3p as
+  valence, a SIESTA `V.psf` freezes them into the core) are the hard
+  case. Fitting onto SIESTA's basis acts as a *filter*: any density the
+  basis cannot represent — the semicore cusp among it — simply drops
+  out, so it never contaminates the valence block.
+- **Source-DM-free.** It needs only a density, so it works from codes
+  that do not expose a density matrix at all (VASP, Quantum ESPRESSO),
+  not just OpenMX.
+- **Patch-free.** The seed is consumed by ordinary `DM.UseSaveDM`
+  settings; you do **not** need the patched SIESTA.
+- **Most consistent across systems.** Across matched and mismatched
+  test systems it is the route whose accuracy varies least.
+
+> **Caveat — simple/matched cases.** When the source and SIESTA
+> pseudopotentials count the *same* valence electrons (no semicore
+> mismatch), the plain **total-density restart** is simpler and can be
+> a touch more accurate. Reach for `dm-seed` whenever the partitions
+> differ, or when you want one route that works everywhere.
+
+### Alternative routes (kept as additional subcommands)
+
+- **Total / difference-density restart** (`convert` + a small SIESTA
+  patch): convert the charge density to SIESTA's grid format (`.RHO`),
+  then a patched SIESTA reads it. Best for the *matched* case; the
+  `--diff` variant also handles mismatch but needs the patch.
+- **Direct density-matrix projection** (`project-dm` / `openmx2siesta-dm`,
+  OpenMX only): read the density matrix OpenMX stores and project it onto
+  SIESTA's basis. No patch; most accurate when semicore is weak/absent,
+  but it requires a source density matrix and degrades on strong-semicore
+  atoms.
+
+Further experimental transfer methods are developed on the `dev`
+branch; the routes above are the supported ones on `main`.
 
 ---
 
 ## Which route should I use?
+
+**If in doubt, use `dm-seed`** — it is the one route that works for
+every source code and every pseudopotential pairing. The table below is
+for when you want to optimize for a specific situation.
 
 The key question is whether your source code's pseudopotential counts
 the **same valence electrons** as your SIESTA `.psf` (e.g. OpenMX's
@@ -35,22 +78,37 @@ has 5 — that is a *mismatch*). If you're not sure, run
 `cube4siesta convert` on the source cube and check whether the printed
 electron count matches what SIESTA expects for your structure.
 
-| Your situation | Use this | Patch needed? | Accuracy (measured) |
+| Your situation | Use this | Patch needed? | Source DM needed? |
 |---|---|---|---|
-| Valence counts **match** | total-density restart (Quickstart below) | yes | best (DM within ~2 %) |
-| Valence counts **differ**, source is OpenMX / QE-with-NC-pseudos | difference-density restart (`--diff`) | yes | best under mismatch (DM ~10 %) |
-| Valence counts **differ**, source is OpenMX, you can't patch SIESTA | DM projection (`project-dm --purify`) | **no** | close second (DM ~16 %, bands match the Δρ route) |
-| Valence counts **differ**, source is VASP (PAW) | regenerate the SIESTA pseudo (`gen-atom-input`) | yes | no density route works from PAW under mismatch |
+| **Anything / not sure** (default) | **filtered DM restart (`dm-seed`)** | **no** | **no** (density only) |
+| Valence counts **match** (simple case) | total-density restart (Quickstart below) | yes | no |
+| Valence counts **differ**, source is OpenMX / QE-with-NC-pseudos | difference-density restart (`--diff`), or `dm-seed` | yes / **no** | no |
+| Valence counts **differ**, source is OpenMX, semicore weak/absent | DM projection (`project-dm --purify`) | **no** | yes (OpenMX `.scfout`) |
+| Valence counts **differ**, source is VASP (PAW) | `dm-seed` (density only), or regenerate the pseudo (`gen-atom-input`) | **no** / yes | no |
 
-(The accuracy numbers are relative Frobenius errors of the resulting
-density matrix vs a fully converged SIESTA reference; details and band
-structures in `examples/DM_PROJECTION_RESULTS.md`.)
+Measured accuracy (relative Frobenius error of the one-step density
+matrix vs a fully converged SIESTA reference): `dm-seed` lands at ~1 %
+on matched Si, ~8 % on strong-semicore V-series (VSSe, VSe₂) where it
+is the most accurate patch-free route, and is the most *consistent*
+across the set. DM projection wins when semicore is weak (Si ~1 %,
+MoS₂ ~8 %) but degrades on V-series; total-ρ is best only in the
+matched case. Details and band structures in
+`examples/DM_PROJECTION_RESULTS.md`.
+
+These measurements all use **OpenMX** source densities. `dm-seed` needs
+only a density, so VASP/QE sources work by construction — but the
+shipped, validated numbers are OpenMX-sourced; treat other-code sources
+as supported-but-unbenchmarked here.
 
 ---
 
 ## Installation
 
-### Step 1: Patch SIESTA
+> **The main `dm-seed` route does not need the SIESTA patch** (Step 1
+> below) — it only uses ordinary `DM.UseSaveDM` settings. Patch SIESTA
+> only if you also want the density-grid restart routes.
+
+### Step 1: Patch SIESTA (optional; only for the density-grid routes)
 
 cube4siesta includes a patch file for SIESTA 4.1.5. Apply it and
 rebuild:
@@ -76,6 +134,72 @@ pip install -e /path/to/cube4siesta
 This gives you the `cube4siesta` command. You'll also need Python 3.9+,
 NumPy, and SciPy (installed automatically). If you're working with VASP
 files, you'll also need `pymatgen` (`pip install pymatgen`).
+
+---
+
+## Main route: `dm-seed` (filtered DM restart)
+
+This is the recommended workflow. It needs **no SIESTA patch** and **no
+density matrix from the source code** — just a difference density.
+
+### 1. Get a difference density from your other code
+
+`dm-seed` consumes `Δρ = ρ_scf − ρ_atoms`:
+
+- **OpenMX** writes it directly as `*.dden.cube`.
+- **Quantum ESPRESSO / VASP**: subtract the atomic-superposition density
+  from the SCF density (e.g. `cube4siesta-vasp-diff` for VASP, see below),
+  or pass the total density and let the basis filter do the work.
+
+### 2. Run a cheap SIESTA baseline once
+
+`dm-seed` reuses a SIESTA run's geometry, basis, `.RHO` grid, and `.DM`
+sparsity pattern. Any quick SIESTA run on the *same structure* works
+(even unconverged — only the layout is borrowed). It produces
+`<stem>.DM`, `<stem>.ORB_INDX`, `<stem>.STRUCT_OUT`, `<stem>.RHO`, and
+`<species>.ion` in one directory.
+
+### 3. Build the seed `.DM`
+
+```bash
+cube4siesta dm-seed \
+    --baseline path/to/siesta_baseline \
+    --stem vsse \
+    --dden VSSe.dden.cube \
+    --output vsse_seed.DM
+```
+
+This fits `Δρ` onto the SIESTA basis and writes
+`D_seed = D_atomic + fit(Δρ)`. A small, fully runnable example ships in
+the repo under `examples/vsse_openmx/dm_seed_demo/` (the OpenMX `Δρ` is
+provided as a compact `.RHO` so no 13 MB cube is needed):
+
+```bash
+cube4siesta dm-seed \
+    --baseline examples/vsse_openmx/dm_seed_demo \
+    --stem vsse \
+    --dden examples/vsse_openmx/dm_seed_demo/vsse_dden.RHO \
+    --output vsse_seed.DM
+```
+
+(VSSe is the hard case — OpenMX treats V 3s/3p as valence, the SIESTA
+`V.psf` does not. The basis filter removes that semicore so it never
+reaches the valence block.)
+
+### 4. Refine the seed with one SIESTA diagonalization
+
+Rename the seed to `<SystemLabel>.DM` in your SIESTA run directory and
+add the settings `dm-seed` prints:
+
+```fdf
+DM.UseSaveDM         true
+MaxSCFIterations     1
+DM.MixingWeight      1.0
+SCFMustConverge      false
+```
+
+SIESTA rebuilds `ρ[D_seed]`, diagonalizes once, and the resulting
+`<SystemLabel>.DM`, bands, and density are your transferred result.
 
 ---
 
@@ -256,6 +380,39 @@ the `.scfout` file, and `cube4siesta project-dm` projects it directly
 onto SIESTA's basis, writing a SIESTA `.DM`. This also handles valence
 mismatches automatically — any density SIESTA's basis cannot represent
 (e.g. semicore electrons) simply drops out of the projection.
+
+### Convenience shortcut: `openmx2siesta-dm`
+
+For the OpenMX projection route, this command automates the SIESTA
+template run and file wrangling. It is a separate entry point from the
+`cube4siesta` subcommands:
+
+```bash
+openmx2siesta-dm \
+    --scfout omx/MoS2.scfout \
+    --siesta-pseudo-dir siesta_pseudos/ \
+    --siesta-cmd siesta \
+    --output mos2_omx_proj_pure.DM
+```
+
+What it automates:
+
+1. Reads OpenMX `DATA.PATH`, species PAO tags, geometry, and `scf.Kgrid` from
+   the embedded input text in `*.scfout`.
+2. Finds the corresponding OpenMX `*.pao` files under `DATA.PATH/PAO`.
+3. Builds a minimal SIESTA template input using the OpenMX `scf.Kgrid`, runs
+   SIESTA once, and obtains `<SystemLabel>.DM`, `<SystemLabel>.ORB_INDX`, and
+   `<Element>.ion`.
+4. Reads the SIESTA target electron count from the template output, purifies the
+   projected matrix to that count, and writes the output `.DM`.
+
+SIESTA 4.1.5 looks for pseudopotentials as `Label.vps` or `Label.psf` in the
+run directory; it does not have an OpenMX-like `DATA.PATH`. Therefore the
+shortcut takes `--siesta-pseudo-dir` and symlinks/copies `Mo.psf`, `S.psf`, etc.
+into the generated template directory.
+
+Use the explicit `cube4siesta project-dm` command below when you want full
+control over every input file.
 
 ### 1. Collect three things from your OpenMX calculation
 
